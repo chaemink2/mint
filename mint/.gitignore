@@ -1,0 +1,50 @@
+# 환경변수 / 시크릿
+.env
+.env.local
+*.key
+*.secret
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 가상환경
+venv/
+env/
+.venv/
+
+# 데이터 / DB / 로그
+data/mint.db
+data/mint.db-journal
+data/.kis_token.json
+data/.universe_cache.json
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+logs/
+*.log
+
+# 모델 산출물
+*.pkl
+*.pt
+*.ckpt
+*.joblib
+data/models/training_data_*.csv
+data/backtest_*.csv
+models/checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
