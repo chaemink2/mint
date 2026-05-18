@@ -30,10 +30,18 @@ class KISConfig:
 
 @dataclass
 class KakaoConfig:
-    """카카오 알림톡 설정 (비즈니스 채널 + 템플릿 승인 필요)"""
+    """카카오 설정.
+    - 1차 채널: "나에게 보내기" (talk_message scope, 개인 가능)
+      필요 필드: rest_api_key, redirect_uri, token_path
+    - 2차 채널: 비즈니스 알림톡 (채널·템플릿 승인 필요, 보류)
+      필요 필드: template_id, receiver_phone
+    """
     rest_api_key: str = os.getenv("KAKAO_REST_API_KEY", "")
-    access_token: str = os.getenv("KAKAO_ACCESS_TOKEN", "")
-    refresh_token: str = os.getenv("KAKAO_REFRESH_TOKEN", "")
+    redirect_uri: str = os.getenv("KAKAO_REDIRECT_URI", "https://localhost")
+    token_path: str = os.getenv(
+        "KAKAO_TOKEN_PATH", "mint/data/.kakao_token.json"
+    )
+    # 비즈니스 알림톡 (보류)
     template_id: str = os.getenv("KAKAO_TEMPLATE_ID", "")
     receiver_phone: str = os.getenv("KAKAO_RECEIVER_PHONE", "")
 

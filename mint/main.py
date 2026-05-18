@@ -44,6 +44,16 @@ def _setup_log_file():
     logging.getLogger().addHandler(fh)
 
 
+def _notify_buys(ids):
+    if not ids:
+        return
+    try:
+        from notifier import notify_buy_signals
+        notify_buy_signals(ids)
+    except Exception as e:
+        log.warning("notifier failure (buy): %s", e)
+
+
 def cmd_scan():
     """KR 워치리스트 룰 스캔 → signals DB. MINT_US_SCAN=true면 NASDAQ도 포함."""
     init_db()
@@ -51,8 +61,14 @@ def cmd_scan():
     markets = ["KOSPI", "KOSDAQ"]
     if config.ops.enable_us_market_scan:
         markets.append("NASDAQ")
+    try:
+        from notifier import maybe_send_heartbeat
+        maybe_send_heartbeat(markets)
+    except Exception as e:
+        log.warning("heartbeat failure: %s", e)
     ids = run_rule_scan(markets=markets)
     log.info("Scan finished — %s signal(s) logged (markets=%s)", len(ids), markets)
+    _notify_buys(ids)
     return ids
 
 
@@ -62,6 +78,7 @@ def cmd_scan_us():
     migrate_db()
     ids = run_rule_scan(markets=["NASDAQ"])
     log.info("US scan finished — %s signal(s) logged", len(ids))
+    _notify_buys(ids)
     return ids
 
 
@@ -96,6 +113,12 @@ def cmd_catch_up():
         "매도 권고: 손절/익절은 카카오페이 앱에서 실행하세요 (Mint는 자동 주문하지 않습니다)"
     )
 
+    try:
+        from notifier import notify_exit_advices
+        notify_exit_advices(advices)
+    except Exception as e:
+        log.warning("notifier failure (exit): %s", e)
+
 
 def cmd_daemon():
     """선택: 상시 스케줄러 (MINT_US_SCAN으로 US 스캔 on/off)."""
@@ -123,12 +146,61 @@ def cmd_daemon():
         CronTrigger(day_of_week="mon-fri", hour="8", minute="50"),
         id="catch_up_morning",
     )
+    scheduler.add_job(
+        cmd_daily_summary,
+        CronTrigger(day_of_week="mon-fri", hour="15", minute="35"),
+        id="daily_summary",
+    )
 
     log.info("Daemon scheduler started (US scan=%s)", config.ops.enable_us_market_scan)
     try:
         scheduler.start()
     except KeyboardInterrupt:
         log.info("Mint daemon stopped")
+
+
+def cmd_daily_summary():
+    """장 마감 후 1회: 오늘 매수 시그널/포지션/매도권고 요약 카톡."""
+    init_db()
+    migrate_db()
+
+    from datetime import datetime, timedelta
+    from portfolio.db import get_conn
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    start = f"{today}T00:00:00"
+    end = (datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+           + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    with get_conn() as conn:
+        buy_today = conn.execute(
+            """SELECT COUNT(*) FROM signals
+               WHERE signal_type='BUY' AND created_at >= ? AND created_at < ?""",
+            (start, end),
+        ).fetchone()[0]
+
+    positions = get_open_positions()
+    advices = evaluate_positions(positions) if positions else []
+    non_hold = [a for a in advices if a.action != "HOLD"]
+
+    extra = []
+    for a in non_hold[:3]:
+        extra.append(f"  · {a.action} {a.name or a.ticker} ({a.profit_pct:+.2f}%)")
+
+    log.info(
+        "Daily summary: BUY=%d, positions=%d, exit_advices(non-HOLD)=%d",
+        buy_today, len(positions), len(non_hold),
+    )
+    try:
+        from notifier import send_daily_summary
+        send_daily_summary(
+            buy_count=buy_today,
+            open_positions=len(positions),
+            exit_actions=len(non_hold),
+            extra_lines=extra or None,
+        )
+    except Exception as e:
+        log.warning("daily summary notify failure: %s", e)
 
 
 def cmd_backtest(markets: list, days: int, max_hold_days: int) -> None:
@@ -170,7 +242,7 @@ def main():
         "command",
         nargs="?",
         default="scan",
-        choices=["scan", "catch-up", "daemon", "backtest", "train"],
+        choices=["scan", "catch-up", "daemon", "backtest", "train", "daily-summary"],
         help="scan (default): one-shot KR rule scan",
     )
     parser.add_argument("--markets", nargs="+", default=None,
@@ -197,6 +269,8 @@ def main():
                 "Default operation is scan-once for intermittent PC use."
             )
         cmd_daemon()
+    elif args.command == "daily-summary":
+        cmd_daily_summary()
     elif args.command == "backtest":
         markets = args.markets or ["KOSPI", "KOSDAQ"]
         cmd_backtest([m.upper() for m in markets], args.days, args.max_hold_days)
