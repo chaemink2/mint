@@ -26,6 +26,8 @@ env/
 data/mint.db
 data/mint.db-journal
 data/.kis_token.json
+data/.kakao_token.json
+data/.notifier_state.json
 data/.universe_cache.json
 data/raw/*
 data/processed/*
