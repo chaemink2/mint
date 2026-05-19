@@ -56,23 +56,54 @@ def _market_emoji(market: str) -> str:
 
 
 def _format_buy_signal(sig: dict) -> str:
-    """단일 매수 시그널 → 200자 이내 메시지."""
+    """단일 매수 시그널 → 200자 이내 메시지. 표기는 의도적으로 정직하게.
+
+    - 'expected_return' = 휴리스틱 모멘텀 점수 (rule_scanner._estimate_expected_return_1d).
+      따라서 '예상 수익' 이라고 단정하지 않고 '모멘텀' 으로 표기.
+    - 'confidence' = ML 켰을 때 P(win), 아니면 룰 score (0~1). 라벨 분기.
+    - target/stop은 가격 + % 둘 다.
+    """
+    from config.settings import config
+
     name = sig.get("name") or sig["ticker"]
     market = sig.get("market", "")
     ref = sig.get("ref_price") or 0
-    expected = (sig.get("expected_return") or 0) * 100
-    confidence = (sig.get("confidence") or 0) * 100
-    valid_until = (sig.get("valid_until") or "")[:16].replace("T", " ")
+    momentum_pct = (sig.get("expected_return") or 0) * 100
+    confidence_pct = (sig.get("confidence") or 0) * 100
     target = sig.get("target_price") or 0
     stop = sig.get("stop_price") or 0
 
+    target_ret = config.signal.target_return * 100
+    stop_ret = config.signal.stop_loss * 100
+    hold_h = config.signal.max_hold_hours
+
+    conf_label = "ML 확률" if config.signal.use_ml_confidence else "룰 점수"
+
+    valid_min = config.ops.signal_valid_minutes
+
     lines = [
         f"🟢 [Mint 매수] {_market_emoji(market)} {name} ({sig['ticker']})",
-        f"가격 {ref:,.0f} · 예상 +{expected:.1f}% · 신뢰 {confidence:.0f}%",
-        f"목표 {target:,.0f} · 손절 {stop:,.0f}",
-        f"유효 {valid_until}" if valid_until else "",
+        f"기준가 {ref:,.0f}원 · {hold_h}h내 +{target_ret:.1f}%/{stop_ret:+.1f}% 권고",
+        f"모멘텀 {momentum_pct:+.1f}% · {conf_label} {confidence_pct:.0f}%",
+        f"목표 {target:,.0f} / 손절 {stop:,.0f}",
+        f"시그널 유효 {valid_min}분",
     ]
     return "\n".join(line for line in lines if line)
+
+
+_ACTION_KR = {
+    "SELL_NOW": "지금 매도",
+    "CONSIDER_SELL": "매도 검토",
+    "HOLD": "보유",
+}
+
+_REASON_KR = {
+    "TARGET": "목표가 도달",
+    "STOP_LOSS": "손절가 터치",
+    "TIME": "시간청산(24h)",
+    "REVERSE": "역방향 시그널",
+    "HOLD": "조건 미충족",
+}
 
 
 def _format_exit_advice(advice) -> str:
@@ -94,12 +125,14 @@ def _format_exit_advice(advice) -> str:
 
     emoji = "🚨" if action == "SELL_NOW" else "⚠️"
     color = "🟢" if pnl >= 0 else "🔴"
+    action_kr = _ACTION_KR.get(action, action)
+    reason_kr = _REASON_KR.get(reason, reason)
     lines = [
-        f"{emoji} [Mint {action}] {_market_emoji(market)} {name} ({ticker})",
+        f"{emoji} [Mint {action_kr}] {_market_emoji(market)} {name} ({ticker})",
         f"현재 {cur:,.0f} / 매수 {buy:,.0f} ({pnl:+.2f}%) {color}",
-        f"사유 {reason} · 보유 {hold_h:.1f}h",
+        f"사유: {reason_kr} · 보유 {hold_h:.1f}h",
         d.get("note") or "",
-        "👉 매도는 카카오페이 앱에서 실행",
+        "👉 실제 매도는 카카오페이 앱에서 실행",
     ]
     return "\n".join(line for line in lines if line)
 
