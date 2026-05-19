@@ -29,6 +29,7 @@ data/.kis_token.json
 data/.kakao_token.json
 data/.notifier_state.json
 data/.universe_cache.json
+data/.stock_names.json
 data/raw/*
 data/processed/*
 !data/raw/.gitkeep

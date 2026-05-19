@@ -97,11 +97,84 @@ def fetch_watchlist_bars(
     return {t: fetch_daily_bars(t, market, days=days) for t in tickers}
 
 
+_NAME_FILE_CACHE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".stock_names.json"
+)
+_NAME_MEM_CACHE: dict[str, str] = {}
+
+
+def _load_name_cache() -> dict[str, str]:
+    if _NAME_MEM_CACHE:
+        return _NAME_MEM_CACHE
+    if not os.path.exists(_NAME_FILE_CACHE_PATH):
+        return _NAME_MEM_CACHE
+    try:
+        import json
+        with open(_NAME_FILE_CACHE_PATH, "r", encoding="utf-8") as f:
+            _NAME_MEM_CACHE.update(json.load(f))
+    except Exception:
+        pass
+    return _NAME_MEM_CACHE
+
+
+def _save_name_cache() -> None:
+    try:
+        import json
+        with open(_NAME_FILE_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(_NAME_MEM_CACHE, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _fetch_name_naver(ticker: str) -> Optional[str]:
+    """Naver Finance 종목 페이지에서 종목명 추출. KRX 인증 불필요."""
+    try:
+        import re
+        import requests
+        r = requests.get(
+            f"https://finance.naver.com/item/main.naver?code={ticker}",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=5,
+        )
+        if r.status_code != 200:
+            return None
+        # <title>에스엠 - 네이버페이 증권</title> 또는 비슷한 패턴
+        m = re.search(r"<title>\s*([^<:|\-]+?)\s*[-:|]", r.text)
+        if m:
+            name = m.group(1).strip()
+            # "네이버페이 증권" 같은 헤더 페이지 방어
+            if name and "증권" not in name and "네이버" not in name and len(name) <= 30:
+                return name
+        return None
+    except Exception:
+        return None
+
+
 def get_stock_name(ticker: str) -> str:
+    """종목명 조회. 캐시 → pykrx → Naver Finance → ticker 폴백."""
     ticker = _normalize_ticker(ticker)
+
+    cache = _load_name_cache()
+    cached = cache.get(ticker)
+    if cached:
+        return cached
+
+    # 1) pykrx (KRX 인증 있을 때만 의미)
     try:
         with _silence_pykrx():
             name = stock.get_market_ticker_name(ticker)
-        return name or ticker
+        if name and name != ticker:
+            cache[ticker] = name
+            _save_name_cache()
+            return name
     except Exception:
-        return ticker
+        pass
+
+    # 2) Naver Finance 폴백 (인증 불필요)
+    name = _fetch_name_naver(ticker)
+    if name:
+        cache[ticker] = name
+        _save_name_cache()
+        return name
+
+    return ticker
