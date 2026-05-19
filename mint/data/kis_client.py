@@ -156,6 +156,81 @@ def get_current_price(ticker: str) -> Optional[KISPrice]:
     )
 
 
+def get_minute_bars(ticker: str, end_hhmmss: str = "153000") -> Optional["pd.DataFrame"]:
+    """국내 분봉 OHLCV (당일, 최근 ~30봉). 자격증명/실패 시 None.
+
+    KIS endpoint: /uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice
+    tr_id: FHKST03010200
+    응답 output2 한 번에 최대 30봉. 시간 역순(최신이 [0])으로 옴.
+
+    반환: DataFrame[ts, open, high, low, close, volume] — 시간 정순으로 정렬.
+    """
+    if not _has_credentials():
+        return None
+    token = _issue_token()
+    if not token:
+        return None
+
+    import pandas as pd  # 지연 import (이 함수만 의존)
+
+    ticker = str(ticker).strip().zfill(6)
+    url = (
+        f"{config.kis.base_url}"
+        "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+    )
+    headers = {
+        "content-type": "application/json; charset=utf-8",
+        "authorization": f"Bearer {token}",
+        "appkey": config.kis.app_key,
+        "appsecret": config.kis.app_secret,
+        "tr_id": "FHKST03010200",
+    }
+    params = {
+        "FID_ETC_CLS_CODE": "",
+        "FID_COND_MRKT_DIV_CODE": "J",
+        "FID_INPUT_ISCD": ticker,
+        "FID_INPUT_HOUR_1": end_hhmmss,
+        "FID_PW_DATA_INCU_YN": "N",
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=_REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        body = resp.json()
+    except Exception as e:
+        log.debug("KIS minute bars fetch failed for %s: %s", ticker, e)
+        return None
+
+    out2 = body.get("output2") or []
+    if not out2:
+        return None
+
+    rows = []
+    for item in out2:
+        try:
+            rows.append(
+                {
+                    "ts": f"{item.get('stck_bsop_date','')} {item.get('stck_cntg_hour','')}",
+                    "open": float(item.get("stck_oprc") or 0),
+                    "high": float(item.get("stck_hgpr") or 0),
+                    "low": float(item.get("stck_lwpr") or 0),
+                    "close": float(item.get("stck_prpr") or 0),
+                    "volume": float(item.get("cntg_vol") or 0),
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows)
+    # KIS는 최신이 먼저 — 시간 정순으로 뒤집고 무의미한 0 봉(장 시작 전) 제거
+    df = df.iloc[::-1].reset_index(drop=True)
+    df = df[(df["close"] > 0) & (df["volume"] >= 0)].reset_index(drop=True)
+    return df if not df.empty else None
+
+
 def is_ref_price_stale(ref_price: float, current_price: Optional[float]) -> bool:
     """현재가가 ref_price와 stale threshold 이상 벗어났는지."""
     if not current_price or not ref_price or ref_price <= 0:

@@ -139,26 +139,38 @@ def evaluate_ticker(ticker: str, market: str, df: pd.DataFrame) -> Optional[dict
     if ml_conf is not None and ml_conf < sig.min_model_confidence:
         return None
 
+    # 분봉 룰 (use_minute_rule=True일 때만, 일봉+ML 통과 후 AND 결합)
+    minute_info = None
+    if sig.use_minute_rule and market in ("KOSPI", "KOSDAQ"):
+        from engine.signals.minute_rule import fetch_and_evaluate
+        minute_info = fetch_and_evaluate(ticker)
+        if minute_info is None:
+            log.debug("Skip %s — 분봉 룰 미통과 또는 KIS 분봉 fetch 실패", ticker)
+            return None
+
     target_price = ref_price * (1 + sig.target_return)
     stop_price = ref_price * (1 + sig.stop_loss)
 
     # 최종 confidence: ML 있으면 ML, 없으면 룰
     final_conf = ml_conf if ml_conf is not None else rule_conf
 
-    return {
+    result = {
         "ticker": ticker,
         "market": market,
         "name": _resolve_name(ticker, market),
         "expected_return": expected,
         "risk_score": risk,
         "model_score": final_conf,
-        "ml_confidence": ml_conf,   # 없으면 None
+        "ml_confidence": ml_conf,
         "rule_confidence": rule_conf,
         "ref_price": ref_price,
         "target_price": target_price,
         "stop_price": stop_price,
         "volume_ratio": vol_ratio,
     }
+    if minute_info:
+        result.update(minute_info)
+    return result
 
 
 def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:

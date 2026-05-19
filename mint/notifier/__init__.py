@@ -111,11 +111,13 @@ def _format_buy_signal(sig: dict) -> str:
     conf_label = "ML 확률" if config.signal.use_ml_confidence else "룰 점수"
     valid_min = config.ops.signal_valid_minutes
     fresh = _freshness_line(sig["ticker"], market, ref)
+    minute_marker = "🔥 5분봉 매수 패턴 동시 통과" if config.signal.use_minute_rule else ""
 
     lines = [
         f"🟢 [Mint 매수] {_market_emoji(market)} {name} ({sig['ticker']})",
         f"기준가 {ref:,.0f}원 · {hold_h}h내 +{target_ret:.1f}%/{stop_ret:+.1f}% 권고",
         fresh or "",
+        minute_marker,
         f"모멘텀 {momentum_pct:+.1f}% · {conf_label} {confidence_pct:.0f}%",
         f"목표 {target:,.0f} / 손절 {stop:,.0f}",
         f"시그널 유효 {valid_min}분",

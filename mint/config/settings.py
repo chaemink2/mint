@@ -82,6 +82,12 @@ class SignalConfig:
     stop_loss: float = float(os.getenv("MINT_STOP_LOSS", "-0.02"))
     max_hold_hours: int = int(os.getenv("MINT_MAX_HOLD_HOURS", "24"))
 
+    # 분봉 룰 (장중 시그널 검증) — KIS 분봉 fetch 필요. 일봉 룰+ML 통과 종목만 평가.
+    use_minute_rule: bool = os.getenv("MINT_USE_MINUTE_RULE", "false").lower() == "true"
+    min_minute_vol_spike: float = float(os.getenv("MINT_MIN_MINUTE_VOL_SPIKE", "3.0"))
+    minute_short_window: int = int(os.getenv("MINT_MINUTE_SHORT_WINDOW", "5"))
+    minute_long_window: int = int(os.getenv("MINT_MINUTE_LONG_WINDOW", "20"))
+
     max_position_pct: float = 0.20
     max_daily_buys: int = 5
 
