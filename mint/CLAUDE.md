@@ -1,15 +1,32 @@
 # Mint 프로젝트 — 핸드오프 / 결정 기록
 
-> **마지막 업데이트**: 2026-05-18 (Claude — Naver 폴백 + 100종목 + 16피처 → AUC 0.596 / Confidence·필터 검증(0.70 매일 6.4개 precision 0.78) / 카카오톡 알림+하트비트+일일요약 / Windows 작업 스케줄러 자동화)
+> **마지막 업데이트**: 2026-05-19 23:55 (Cursor 검토 P1~P3 반영 + 카드 E 200×730 학습. AUC 0.582, 임계값 0.60 일평균 1.3개·precision 0.79. 운영 가능 베타 도달.)
 > **다음 세션 픽업 시**: 아래 [🔁 다음 세션 픽업 가이드](#-다음-세션-픽업-가이드) 부터 읽으세요.
-> **Cursor 변경 이력**: `CURSOR.md`
+> **Cursor 변경 이력**: `CURSOR.md` · **Cursor 2차 검토 (5/19)**: `REVIEW_CURSOR.md`
 
 ---
 
-## 🔁 다음 세션 픽업 가이드 (2026-05-19 이후)
+## 🔁 다음 세션 픽업 가이드 (2026-05-20 이후)
 
 ### 한 줄 요약
-**100종목·16피처 LightGBM(AUC 0.596) + 카카오톡 자동 알림(하트비트/시그널/매도권고/일일요약) + 평일 작업 스케줄러로 자동 운영. 필터 검증(룰 only 0.42 → ML 0.70 0.78 / ML 0.75 0.99)으로 ML 필터가 실제로 효과 있음 확인. 사용자는 데이터는 풍부하길 원하고 일봉 한계 아쉬워함 — 다음 카드 1순위: KIS 현재가로 일봉 시그널 신선도 검증(저비용 분봉 흉내), 2순위: KIS 분봉 룰 신설.**
+**Cursor 검토 P1~P3 반영 + 카드 E (200종목·730일) 완료. AUC 0.582, 임계값 0.60 일평균 1.3개·precision 0.79 운영 가능 수준. 사용자가 ML 0.60 + 분봉 ON으로 운영 시작. 2026-05-20부터 실제 outcome 누적 — 1~2주 후 실 분포로 재학습이 다음 진짜 카드. 그 사이 카드 C(시장 regime/섹터) 진행 가능.**
+
+### 첫 행동 (다음 세션 시작 시)
+```powershell
+# 1) 운영 첫날 outcome 보고 받기
+python -X utf8 mint\main.py outcomes
+#    → "Win rate — 7d: x.xx% (W/L), 30d: ..." 출력
+#    데이터 적으면 still PENDING 많음 — 24h 안 지난 시그널이라
+
+# 2) 어제 시그널 보고 — 카톡으로 받았던 종목들 확인
+python -X utf8 -c "import sys; sys.path.insert(0,'mint'); from portfolio.db import get_conn; from datetime import datetime, timedelta;
+since = (datetime.now() - timedelta(days=2)).isoformat();
+with get_conn() as c:
+    rows = c.execute('SELECT id,ticker,name,status,outcome,expiry_reason,created_at FROM signals WHERE created_at >= ? ORDER BY created_at DESC', (since,)).fetchall();
+    for r in rows: print(dict(r))"
+
+# 3) 사용자 피드백 받기 — 어떤 시그널이 실제 매수까지 갔는지, 결과 어땠는지
+```
 
 ### 어디까지 왔나
 - ✅ Step 1, 2, 2b(KIS), 2c, 3a, 3b, 4, 6(카카오톡 나에게보내기), 7
@@ -52,28 +69,17 @@
 6. **F. 중복 피처 4개(bb/obv/turnover/regime_trend) 정리** — AUC 유지하면서 단순화.
 7. **G. target/stop 대칭화 검토** — 사용자 확정사항 변경 필요.
 
-### 다음 세션 시작 시 첫 행동
-```powershell
-# 1) 현재 상태 점검
-git log -5 --oneline
-ls mint/data/models/
+### 다음에 검토할 카드 (5/20 운영 시작 후 우선순위)
 
-# 2) 사용자 의사 확인:
-#    "A(현재가 검증) / B(분봉 룰) / D(페이퍼 운영부터) 중 무엇 먼저?"
-#
-# 3a) A 선택 시:
-#    engine/signals/rule_scanner.py 에 KIS fetch + stale 페널티 추가
-#    notifier 메시지 포맷에 STALE 마커 추가
-#
-# 3b) B 선택 시:
-#    data/kis_client.py 에 get_minute_bars() 추가
-#    config/settings.py 에 분봉 룰 임계값
-#    engine/signals/ 에 minute_rule.py 신규
-#
-# 3c) D 선택 시:
-#    daily-summary 카톡 받으면서 1개월 누적
-#    실제 win rate vs 모델 예상치 비교 보고서
-```
+**상태**: 사용자 운영 시작 — ML 임계값 0.60 + 분봉 ON. Windows 작업 스케줄러 평일 08:30~15:20 10분 간격.
+**남은 사용자 작업**: 작업 스케줄러에 **`Mint 일일 요약` 트리거 (15:35) 추가** — outcome 평가가 돌게 하는 핵심. (현재 미등록, CLAUDE.md 픽업 가이드의 단계 보면 됨)
+
+1. **운영 데이터 수집 (즉시)** — 1~2주 운영하면서 outcome (WIN/LOSS/TIME_EXIT) DB에 자동 축적. 일일 요약 카톡으로 누적 win rate 확인. 모델 예상(precision 0.79)과 실제 격차 측정.
+2. **카드 C — 진짜 독립 신호 (4~6h)** — KOSPI/KOSDAQ 지수 regime, 섹터 모멘텀. 데이터 확대(카드 E) 끝났으니 다음 도약 카드. AUC 0.582 → 0.6+ 가능성.
+3. **카드 D — 페이퍼 트레이딩 인프라 (3~5h)** — 실제 매수 시뮬레이션 + 누적 수익률 일일 요약. Cursor #7 (outcome 일봉 기준 한계) 자연 해결.
+4. **Cursor #6 — 분봉 룰 임계값 분포 검증 (2~3h)** — KIS 분봉 일주일치 fetch해서 vol_spike 3.0이 적절한지 분포 확인. 1~2주 운영 후 결과 보고 결정.
+5. **카드 F — target/stop 대칭화 검토** — 사용자 결정 사안. 운영 outcome에서 LOSS 비율이 높으면 재고.
+6. **outcome 누적 후 모델 재학습 (1~2주 후)** — 실 운영 분포 vs 백테스트 분포 비교. 가장 흥미로운 학습 시점.
 
 ### Windows 작업 스케줄러 — 일일 요약 트리거 추가 (사용자 작업)
 이미 등록한 `Mint 시그널 스캔` 외에 별도로:
