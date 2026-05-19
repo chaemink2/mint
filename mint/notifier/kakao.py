@@ -200,9 +200,25 @@ def _get_valid_access_token() -> Optional[str]:
 
 
 def _truncate(text: str, limit: int = TEXT_MAX_LEN) -> str:
+    """200자 제한. 라인 단위로 자르되, 핵심 정보(앞쪽)는 유지하고
+    부가 정보(뒤쪽)부터 제거. 한 라인이 limit 초과 시에만 글자 단위 truncate.
+    """
     if len(text) <= limit:
         return text
-    return text[: limit - 1] + "…"
+    lines = text.split("\n")
+    accumulated = []
+    cur_len = 0
+    for line in lines:
+        candidate = cur_len + len(line) + (1 if accumulated else 0)
+        if candidate > limit:
+            break
+        accumulated.append(line)
+        cur_len = candidate
+    out = "\n".join(accumulated)
+    # 첫 라인 자체가 limit 초과인 극단 케이스
+    if not out:
+        return text[: limit - 1] + "…"
+    return out
 
 
 def send_text(text: str, link_url: Optional[str] = None, button_title: Optional[str] = None) -> bool:

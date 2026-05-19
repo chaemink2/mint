@@ -105,6 +105,8 @@ def cmd_scan_us():
     """US-only scan (daemon에서 야간 호출용)."""
     init_db()
     migrate_db()
+    # KR 시그널 만료/알림도 같이 처리 (사용자가 자고 있는 동안 만료된 거 정리)
+    _process_expiries()
     ids = run_rule_scan(markets=["NASDAQ"])
     log.info("US scan finished — %s signal(s) logged", len(ids))
     _notify_buys(ids)

@@ -99,7 +99,12 @@ ls mint/data/models/
 
 ### 정책 (필수)
 - **손절 -2%는 Mint가 보장하지 않음** — 권고만. 실행은 카카오페이 앱(지정가/손절 주문 권장)
-- **ML 신뢰도 70%** — 100종목 모델(AUC 0.596) 기준 val set에서 매일 평균 6.4개 시그널, precision 0.78, lift 1.88×. 임계값 0.70 합리적. 더 보수적으로 0.75 가면 매일 1.8개·precision 0.988 (trade-off).
+- **ML 신뢰도 — 2026-05-19 P1 정합 수정 후 재측정**: AUC 0.551, 분포 narrow.
+  - 임계값 0.70 = **매일 0.3개** (precision 0.86) — ML+분봉 ON 시 카톡 매우 드묾
+  - 임계값 0.60 = **매일 0.7개** (precision 0.74, lift 1.81×) — 균형
+  - 임계값 0.50 = 위와 동일 (분포 plateau)
+  - 권장: `MINT_MIN_ML_CONFIDENCE=0.60` 으로 낮추기. 또는 `MINT_USE_MINUTE_RULE=false`로 분봉 해제.
+  - 진짜 의미 있는 도약은 **카드 E (200종목 또는 730일 데이터 확대)** — 현재 AUC가 낮은 건 정합 후 데이터 양이 부족(6,267 샘플)한 게 주원인.
 - **기본 실행**: `python mint/main.py scan` (단발). 상시 스케줄러는 `MINT_DAEMON=1` + `daemon` 명령
 - **US 야간 스캔**: 기본 **OFF** (`MINT_US_SCAN=false`)
 
@@ -187,7 +192,8 @@ mint/
 | 2026-05-17 | 20 (static) | 365d | 1d | 4,617 | 0.465 | 0.528 | 0.6860 | 7 | 노이즈 수준. |
 | 2026-05-18a | 20 (static) | 365d | 3d | 4,636 | 0.441 | 0.538 | 0.6793 | 3 | 1d→3d 확장만으로는 효과 없음. |
 | 2026-05-18b | 100 (Naver) | 365d | 1d | 47,440 | 0.443 | **0.594** | 0.6608 | 85 | 데이터 ×10.3 → AUC +0.066. 노이즈 탈출. (11 피처) |
-| 2026-05-18c | 100 (Naver) | 365d | 1d | 47,440 | 0.443 | **0.596** | 0.6598 | 59 | **+5 피처**(bb_position, obv_slope, gap_pct, regime_trend, turnover_pct60). AUC +0.002 — 의미 없음. |
+| 2026-05-18c | 100 (Naver) | 365d | 1d | 47,440 | 0.443 | **0.596** | 0.6598 | 59 | **+5 피처**(bb_position, obv_slope, gap_pct, regime_trend, turnover_pct60). AUC +0.002 — 의미 없음. ⚠️ **5/19 수정 사항**: 학습 분포에 룰 외 시점이 섞여 있어 운영(룰+ML 통과)과 분포 mismatch. 5/18d/e 수치는 운영에서 재현 안 됨. |
+| 2026-05-19a | 100 (Naver) | 365d | 1d | **6,267** | 0.419 | 0.551 | 0.6701 | 16 | **P1 학습-추론 정합 수정** — build_ticker_dataset에 룰 필터(expected/risk/vol) 추가. 데이터 ÷7.6로 줄어 AUC 하락(-0.045) 노이즈 근처. 진짜 운영 동작은 이 모델 기준. |
 
 **해석**:
 - 5/17→5/18a: holding window 1d→3d 변경만으로는 AUC 노이즈 범위(+0.010). 보유기간이 문제는 아님.
@@ -207,18 +213,31 @@ mint/
 
 → 단일 종목의 가격/거래량 파생 지표는 거의 포화. 다음 의미 있는 도약은 **진짜 독립 신호**(시장 지수 regime, 섹터, 외국인/기관 수급, 뉴스) 또는 **추가 데이터 양**(200종목·730일).
 
-### 5/18e 필터 날카로움 검증 (val n=9,488, 49일)
+### 5/18e 필터 날카로움 (val n=9,488, 49일) — ⚠️ DEPRECATED
 | 운영 모드 | 시그널/일 | Win rate | Avg/trade* | Lift |
 |---|---|---|---|---|
 | 룰 only (ML off) | many | 0.416 | +0.29% | 1.00× |
-| 룰 + ML 0.70 | 6.4 | **0.780** | +2.29% | 1.88× |
-| 룰 + ML 0.75 | 1.8 | **0.988** | +3.44% | 2.38× |
+| 룰 + ML 0.70 | 6.4 | 0.780 | +2.29% | 1.88× |
+| 룰 + ML 0.75 | 1.8 | 0.988 | +3.44% | 2.38× |
 | Top-1/day | 1 | 0.980 | +3.40% | 2.36× |
-| Top-3/day | 3 | 0.823 | +2.55% | 1.98× |
 
-*win=+3.5%/loss=-2% 단순 가정, 슬리피지 미반영.
+⚠️ **이 수치는 학습-추론 분포 mismatch가 있는 5/18c 모델 기준이라 운영에서 재현 안 됨.** Cursor 검토(5/19) 발견. 정정된 P1 수치는 아래 5/19b 참조.
 
-**핵심**: 룰 only는 win 0.416(<0.5)으로 사실상 무작위 — **ML 필터가 진짜 일하고 있음**. 0.75는 precision 0.988이지만 86 샘플밖에 안 돼 overfitting 위험. 0.70이 sweet spot. **다른 시기 데이터로 재검증 필요** (val 49일이 학습 데이터 직후 시기).
+### 5/19b 필터 날카로움 (P1 모델, val n=1,254, 66일)
+| 운영 모드 | 시그널/일 | Precision | Lift |
+|---|---|---|---|
+| 룰 only (ML off) | many | 0.407 | 1.00× |
+| 룰 + ML 0.50~0.60 | 0.7 | 0.735 | 1.81× |
+| 룰 + ML 0.65~0.80 | 0.3 | **0.857** | 2.11× |
+| Top-1/day | 1 | 0.561 | 1.38× |
+| Top-3/day | 3 | 0.503 | 1.24× |
+
+**해석**:
+- ML 필터는 여전히 유효 (룰 only 0.41 → ML 0.70 0.86). lift 2× 수준은 사실.
+- **이전 0.988 / 0.980 같은 화려한 수치는 mismatch로 인한 과대평가**였음. 진짜 정합 모델은 0.86 / 0.56 수준.
+- 임계값 0.70은 일평균 **0.3개** (3~4일에 1번 시그널). ML 켜고 운영 시 카톡이 드물어짐.
+- 분봉 룰까지 ON이면 더 줄어듦 (월 1~2건 가능). **너무 적으면 임계값 0.60으로 낮춰 일평균 0.7개로**.
+- 분포 매우 narrow (p99 0.833) — 데이터 양 부족이 진짜 원인. **카드 E(200종목 or 730일)가 다음 의미 있는 도약**.
 
 ### 5/18d Confidence 분포 (val n=9,488)
 | Metric | 값 |
@@ -257,6 +276,9 @@ mint/
 | 2026-05-19 | 카드 B1 완료: KIS 분봉 룰 신설 (거래량 spike + 단기 모멘텀 + 양봉) | [engine/signals/minute_rule.py](engine/signals/minute_rule.py) |
 | 2026-05-19 | 카드 B2 완료: 시그널 만료 카톡 (TIME/TARGET_HIT/STOP_HIT) — '죽은 시그널 매수' 방지 | [portfolio/db.py:check_price_expiry](portfolio/db.py), [notifier:notify_expired_signals](notifier/__init__.py) |
 | 2026-05-19 | 카드 B3 완료: 시그널 outcome 자동 평가 + 일일 요약에 누적 win rate | [portfolio/db.py:evaluate_pending_outcomes](portfolio/db.py) |
+| 2026-05-19 | **Cursor 검토 P1 반영**: training.py에 룰 필터 추가 — 학습-추론 분포 정합. AUC 0.596 → 0.551 (현실 반영, 데이터 부족 노출) | [engine/training.py:build_ticker_dataset](engine/training.py) |
+| 2026-05-19 | **Cursor 검토 P2 반영**: cmd_scan_us 만료 처리 추가, rule_scanner에 max_daily_buys 한도 적용 | [main.py:cmd_scan_us](main.py), [rule_scanner.run_rule_scan](engine/signals/rule_scanner.py) |
+| 2026-05-19 | **Cursor 검토 P3 반영**: 매수 메시지 핵심 정보 위로 + 라인 단위 truncate (200자 안전) | [notifier/kakao.py:_truncate](notifier/kakao.py), [notifier/__init__.py:_format_buy_signal](notifier/__init__.py) |
 
 ---
 

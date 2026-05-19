@@ -43,7 +43,18 @@ def build_ticker_dataset(
     max_hold_days: int = 1,
 ) -> List[dict]:
     """단일 종목 → (피처, 레이블) 리스트.
-    중요: 룰 필터를 통과한 진입점만 학습 데이터로 사용 — 추론 시점과 분포 매칭."""
+
+    중요(2026-05-19 수정): 학습 분포 == 추론 분포가 되도록 룰 필터(룰 스캐너와 동일 조건)
+    통과한 시점만 학습 데이터로 사용. 이전 버전은 모든 슬라이딩 윈도우 시점을 학습했으나
+    실시간 scan은 룰 통과 종목만 시그널을 발생시키므로 train/inference 분포 mismatch였음.
+    분봉 룰은 학습 시점에 재현 불가능(분봉 히스토리 없음) — 일봉 룰까지만 매칭.
+    """
+    from engine.signals.rule_scanner import (
+        _estimate_expected_return_1d,
+        _risk_score,
+        _volume_ratio,
+    )
+
     bars = fetch_bars(ticker, market, days=days + window)
     if bars.empty or len(bars) < window + 2:
         return []
@@ -54,6 +65,17 @@ def build_ticker_dataset(
     for i in range(window, len(bars) - 1):
         sub = bars.iloc[i - window : i + 1].reset_index(drop=True)
         if len(sub) < MIN_BARS:
+            continue
+
+        # 룰 필터 — 룰 스캐너의 evaluate_ticker와 동일 임계값
+        expected = _estimate_expected_return_1d(sub)
+        if expected < sig.min_expected_return_1d:
+            continue
+        risk = _risk_score(sub)
+        if risk > sig.max_risk_score:
+            continue
+        vol_ratio = _volume_ratio(sub)
+        if vol_ratio < sig.min_volume_ratio:
             continue
 
         feats = compute_features(sub)

@@ -177,6 +177,7 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
     """
     Scan KR watchlists, log BUY signals to DB.
     Returns list of new signal IDs.
+    하루 한도(max_daily_buys) 도달 시 신규 시그널 발급 중단.
     """
     db.init_db()
     db.migrate_db()
@@ -185,10 +186,27 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
     markets = markets or ["KOSPI", "KOSDAQ"]
     bars_map = fetch_watchlists_by_markets(markets, days=60)
 
+    # 오늘 이미 발생한 BUY 카운트 → max_daily_buys 한도
+    from datetime import datetime as _dt
+    today_start = _dt.now().strftime("%Y-%m-%d") + "T00:00:00"
+    with db.get_conn() as conn:
+        today_count = conn.execute(
+            "SELECT COUNT(*) FROM signals WHERE signal_type='BUY' AND created_at >= ?",
+            (today_start,),
+        ).fetchone()[0]
+    daily_limit = config.signal.max_daily_buys
+    remaining = max(0, daily_limit - today_count)
+    if remaining == 0:
+        log.info("Daily BUY limit reached (%d) — skipping new signals", daily_limit)
+        return []
+
     new_ids: List[int] = []
     dedup_hours = config.ops.signal_dedup_hours
 
     for ticker, df in bars_map.items():
+        if len(new_ids) >= remaining:
+            log.info("Daily BUY limit hit (%d) — stopping scan", daily_limit)
+            break
         if df.empty:
             continue
         market = df["market"].iloc[-1]
