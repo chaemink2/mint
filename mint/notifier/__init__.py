@@ -246,6 +246,56 @@ def send_daily_summary(
     return ok
 
 
+_EXPIRY_LABEL = {
+    "TIME": "❌ 시그널 만료 — 유효시간 지남",
+    "TARGET_HIT": "✅ 목표가 도달 — 매수 적기 종료",
+    "STOP_HIT": "🔴 손절가 터치 — 매수 추천 종료",
+}
+
+
+def _format_expiry(sig: dict) -> str:
+    """만료 시그널 한 통."""
+    reason = sig.get("expiry_reason") or "TIME"
+    label = _EXPIRY_LABEL.get(reason, f"❌ 만료 ({reason})")
+    name = sig.get("name") or sig.get("ticker", "")
+    ticker = sig.get("ticker", "")
+    market = sig.get("market", "")
+    ref = sig.get("ref_price") or 0
+    cur = sig.get("expiry_price") or 0
+    lines = [
+        f"{label}",
+        f"{_market_emoji(market)} {name} ({ticker})",
+        f"기준가 {ref:,.0f}원" + (
+            f" → 현재 {cur:,.0f}원" if cur else ""
+        ),
+        "👉 이미 매수했다면 별도 매도 권고를 기다리세요.",
+        "    아직 안 샀다면 이 시그널은 무시하세요.",
+    ]
+    return "\n".join(line for line in lines if line)
+
+
+def notify_expired_signals(signals: Iterable[dict]) -> int:
+    """만료된 시그널 목록 → 카톡 알림. 발송 수 반환."""
+    items = [s for s in signals if s]
+    if not items:
+        return 0
+    if not _enabled():
+        log.info("Expiry notify skipped (%d items) — notifier disabled", len(items))
+        return 0
+
+    from notifier import kakao
+    sent = 0
+    for s in items[:MAX_INDIVIDUAL_SENDS]:
+        if kakao.send_text(_format_expiry(s)):
+            sent += 1
+    if len(items) > MAX_INDIVIDUAL_SENDS:
+        kakao.send_text(
+            f"❌ 만료 시그널 {len(items)}건 중 상위 {MAX_INDIVIDUAL_SENDS}건만 표시"
+        )
+    log.info("Kakao expiry notify sent=%d (of %d)", sent, len(items))
+    return sent
+
+
 def notify_buy_signals(signal_ids: Iterable[int]) -> int:
     """시그널 ID 목록 → 카카오 알림. 발송된 메시지 수 반환."""
     ids = [i for i in signal_ids if i]

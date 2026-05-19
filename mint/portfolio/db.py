@@ -94,6 +94,13 @@ _MIGRATIONS = [
     ("signals", "status", "TEXT DEFAULT 'active'"),
     ("signals", "valid_until", "TEXT"),
     ("signals", "notified_at", "TEXT"),
+    ("signals", "expiry_reason", "TEXT"),
+    ("signals", "expiry_notified", "INTEGER DEFAULT 0"),
+    ("signals", "expiry_price", "REAL"),
+    ("signals", "outcome", "TEXT"),
+    ("signals", "outcome_max", "REAL"),
+    ("signals", "outcome_min", "REAL"),
+    ("signals", "outcome_evaluated_at", "TEXT"),
     ("positions", "signal_id", "INTEGER"),
     ("positions", "remaining_qty", "INTEGER"),
     ("positions", "currency", "TEXT DEFAULT 'KRW'"),
@@ -230,14 +237,86 @@ def has_recent_signal(ticker: str, signal_type: str, hours: int = 4) -> bool:
 
 
 def expire_stale_signals() -> int:
+    """시간 만료된 active 시그널을 expired로. 만료 사유는 'TIME'."""
     now = datetime.now().isoformat()
     with get_conn() as conn:
         cur = conn.execute(
-            """UPDATE signals SET status='expired'
-               WHERE status='active' AND valid_until IS NOT NULL AND valid_until < ?""",
+            """UPDATE signals
+               SET status='expired',
+                   expiry_reason=COALESCE(expiry_reason,'TIME')
+               WHERE status='active'
+                 AND valid_until IS NOT NULL AND valid_until < ?""",
             (now,),
         )
         return cur.rowcount
+
+
+def check_price_expiry() -> List[Dict]:
+    """active 시그널 중 KIS 현재가 기준 target/stop 도달 → expired 처리.
+    반환: 새로 만료된 시그널 dict 리스트 (expiry_reason, expiry_price 포함).
+    KIS 미설정/실패한 종목은 skip.
+    """
+    from data import kis_client  # 순환 방지 위해 함수 내 import
+
+    newly = []
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM signals
+               WHERE status='active' AND signal_type='BUY'
+                 AND market IN ('KOSPI','KOSDAQ')
+                 AND target_price IS NOT NULL AND stop_price IS NOT NULL"""
+        ).fetchall()
+        active = [dict(r) for r in rows]
+
+    for sig in active:
+        try:
+            kp = kis_client.get_current_price(sig["ticker"])
+        except Exception:
+            continue
+        if not kp:
+            continue
+
+        reason = None
+        if kp.price >= float(sig["target_price"]):
+            reason = "TARGET_HIT"
+        elif kp.price <= float(sig["stop_price"]):
+            reason = "STOP_HIT"
+        if not reason:
+            continue
+
+        with get_conn() as conn:
+            conn.execute(
+                """UPDATE signals
+                   SET status='expired', expiry_reason=?, expiry_price=?
+                   WHERE id=? AND status='active'""",
+                (reason, kp.price, sig["id"]),
+            )
+        newly.append({**sig, "expiry_reason": reason, "expiry_price": kp.price})
+
+    return newly
+
+
+def unnotified_expired_signals() -> List[Dict]:
+    """만료 알림 아직 안 보낸 시그널 목록."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM signals
+               WHERE status='expired'
+                 AND (expiry_notified IS NULL OR expiry_notified = 0)
+               ORDER BY id ASC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_expiry_notified(signal_ids: List[int]) -> None:
+    if not signal_ids:
+        return
+    placeholders = ",".join("?" for _ in signal_ids)
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE signals SET expiry_notified=1 WHERE id IN ({placeholders})",
+            tuple(signal_ids),
+        )
 
 
 def mark_signal_acted(signal_id: int) -> None:

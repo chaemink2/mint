@@ -18,7 +18,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from datetime import datetime
 
 from config.settings import config
-from portfolio.db import init_db, migrate_db, expire_stale_signals, get_open_positions
+from portfolio.db import (
+    init_db, migrate_db, expire_stale_signals, get_open_positions,
+    check_price_expiry, unnotified_expired_signals, mark_expiry_notified,
+)
 from engine.signals.rule_scanner import run_rule_scan
 from engine.signals.exit_strategy import evaluate_positions
 
@@ -54,6 +57,27 @@ def _notify_buys(ids):
         log.warning("notifier failure (buy): %s", e)
 
 
+def _process_expiries():
+    """시간 만료 + 가격 도달 만료를 처리하고 사용자에게 카톡 알림.
+    scan/catch-up 시작 시 호출. 알림 중복 방지(expiry_notified 마킹).
+    """
+    try:
+        time_count = expire_stale_signals()
+        if time_count:
+            log.info("Expired by time: %d signal(s)", time_count)
+        price_expired = check_price_expiry()
+        if price_expired:
+            log.info("Expired by price: %d signal(s)", len(price_expired))
+
+        pending = unnotified_expired_signals()
+        if pending:
+            from notifier import notify_expired_signals
+            notify_expired_signals(pending)
+            mark_expiry_notified([s["id"] for s in pending])
+    except Exception as e:
+        log.warning("expiry processing failed: %s", e)
+
+
 def cmd_scan():
     """KR 워치리스트 룰 스캔 → signals DB. MINT_US_SCAN=true면 NASDAQ도 포함."""
     init_db()
@@ -66,6 +90,10 @@ def cmd_scan():
         maybe_send_heartbeat(markets)
     except Exception as e:
         log.warning("heartbeat failure: %s", e)
+
+    # 만료된 시그널 정리 + 알림 (BEFORE new scan: 사용자가 새 시그널 보기 전에 죽은 거 알림)
+    _process_expiries()
+
     ids = run_rule_scan(markets=markets)
     log.info("Scan finished — %s signal(s) logged (markets=%s)", len(ids), markets)
     _notify_buys(ids)
@@ -86,8 +114,7 @@ def cmd_catch_up():
     """PC 재실행 시: stale 시그널 만료 + 보유 포지션 매도 권고 로그."""
     init_db()
     migrate_db()
-    expired = expire_stale_signals()
-    log.info("Expired %s stale signal(s)", expired)
+    _process_expiries()
 
     positions = get_open_positions()
     if not positions:
