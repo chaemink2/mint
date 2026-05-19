@@ -55,6 +55,36 @@ def _market_emoji(market: str) -> str:
     return {"KOSPI": "🇰🇷", "KOSDAQ": "🇰🇷", "NASDAQ": "🇺🇸"}.get(market, "📈")
 
 
+def _freshness_line(ticker: str, market: str, ref_price: float) -> Optional[str]:
+    """KIS 현재가 fetch → drift 마커 줄 반환. 없으면 None (KIS 미설정/실패).
+
+    - 위로 stale (현재가 >> 기준가): ⚠️ 엔트리 늦음
+    - 아래로 stale (현재가 << 기준가): 💡 더 좋은 진입 기회
+    - drift 작으면 ✓ 신선
+    """
+    if market not in ("KOSPI", "KOSDAQ"):
+        return None
+    if not ref_price or ref_price <= 0:
+        return None
+    try:
+        from config.settings import config
+        from data import kis_client
+        kp = kis_client.get_current_price(ticker)
+    except Exception:
+        return None
+    if not kp:
+        return None
+
+    drift = (kp.price - ref_price) / ref_price
+    drift_pct = drift * 100
+    threshold = config.ops.ref_price_stale_pct
+    if drift > threshold:
+        return f"⚠️ 현재 {kp.price:,.0f}원 ({drift_pct:+.2f}% · 이미 상승, 엔트리 늦음)"
+    if drift < -threshold:
+        return f"💡 현재 {kp.price:,.0f}원 ({drift_pct:+.2f}% · 기준보다 낮음, 더 좋은 진입)"
+    return f"✓ 현재 {kp.price:,.0f}원 ({drift_pct:+.2f}% · 신선)"
+
+
 def _format_buy_signal(sig: dict) -> str:
     """단일 매수 시그널 → 200자 이내 메시지. 표기는 의도적으로 정직하게.
 
@@ -62,6 +92,7 @@ def _format_buy_signal(sig: dict) -> str:
       따라서 '예상 수익' 이라고 단정하지 않고 '모멘텀' 으로 표기.
     - 'confidence' = ML 켰을 때 P(win), 아니면 룰 score (0~1). 라벨 분기.
     - target/stop은 가격 + % 둘 다.
+    - KIS 현재가 있으면 신선도 마커 추가 (⚠️/💡/✓).
     """
     from config.settings import config
 
@@ -78,12 +109,13 @@ def _format_buy_signal(sig: dict) -> str:
     hold_h = config.signal.max_hold_hours
 
     conf_label = "ML 확률" if config.signal.use_ml_confidence else "룰 점수"
-
     valid_min = config.ops.signal_valid_minutes
+    fresh = _freshness_line(sig["ticker"], market, ref)
 
     lines = [
         f"🟢 [Mint 매수] {_market_emoji(market)} {name} ({sig['ticker']})",
         f"기준가 {ref:,.0f}원 · {hold_h}h내 +{target_ret:.1f}%/{stop_ret:+.1f}% 권고",
+        fresh or "",
         f"모멘텀 {momentum_pct:+.1f}% · {conf_label} {confidence_pct:.0f}%",
         f"목표 {target:,.0f} / 손절 {stop:,.0f}",
         f"시그널 유효 {valid_min}분",

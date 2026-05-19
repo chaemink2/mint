@@ -30,11 +30,12 @@
 | Windows 작업 스케줄러 | 사용자 셋업 완료 (08:30 + 10분 간격, 평일) | 환경변수: User scope |
 
 ### 다음에 검토할 카드 (우선순위)
-1. **A. 일봉 시그널 + KIS 현재가 신선도 검증 (2~3시간 작업)** — 가장 가성비 높음.
-   - 현재 [data/kis_client.py:159](data/kis_client.py:159) `is_ref_price_stale` 가 있고 대시보드에서만 씀.
-   - 룰 스캐너에서 시그널 생성 직후 KIS 현재가 fetch → drift > stale_pct면 "STALE 시그널"로 따로 표시(예: 메시지에 ⚠️) + ML score 약간 페널티 옵션
-   - **사용자 외출 + 작업 스케줄러 운영 시나리오에 직접 도움** (장중 +3% 이미 갔는데 카톡 받는 헛스윙 방지)
-2. **B. KIS 분봉 룰 신설 (1~2주 작업)** — 진정한 장중 시그널.
+1. ~~**A. 일봉 시그널 + KIS 현재가 신선도 검증**~~ ✅ 2026-05-19 완료
+   - [notifier/__init__.py `_freshness_line`](notifier/__init__.py) — 카톡 메시지에 KIS 현재가 + drift 마커
+   - 위로 stale → ⚠️ 엔트리 늦음, 아래로 stale → 💡 더 좋은 진입, 그 사이 → ✓ 신선
+   - 임계값: `MINT_REF_STALE_PCT` (기본 0.008 = 0.8%)
+   - KIS 키 없으면 graceful no-op (기존 메시지 유지)
+2. **B. KIS 분봉 룰 신설 (1~2주 작업)** — 진정한 장중 시그널. **1순위로 승격.**
    - KIS endpoint: `inquire-time-itemchartprice` (1/3/5/10/15/30/60분봉)
    - 룰 후보: 5분봉 거래량 spike(20봉 평균 ×3), 5/10일선 돌파, 갭상승 후 보합/상승
    - 일봉 룰과 AND 조건으로 결합 → 신호 폭 ↓ 정밀도 ↑
@@ -244,6 +245,9 @@ mint/
 | 2026-05-18 | 알림 채널: **카카오톡 나에게 보내기** (talk_message scope). 비즈 알림톡은 계속 보류. | [notifier/kakao.py](notifier/kakao.py) |
 | 2026-05-18 | ML 임계값 0.70 유지 (precision 0.78, 매일 6.4개) — 더 보수적 원하면 0.75 권장 | 학습 결과 기록 5/18d |
 | 2026-05-18 | KIS 키 없어도 시스템 동작 — 장중 매도/STALE 정밀도만 손해. 사용 패턴 정해진 뒤 신청 결정 | [data/kis_client.py](data/kis_client.py) |
+| 2026-05-19 | 종목명 fetch에 Naver 폴백 (pykrx 인증 영향) | [data/krx_client.py:get_stock_name](data/krx_client.py) |
+| 2026-05-19 | 카톡 메시지 표기 정직성 개선 — "예상" → "모멘텀", action/reason 한국어 | [notifier/__init__.py](notifier/__init__.py) |
+| 2026-05-19 | 카드 A 완료: KIS 현재가 신선도 마커 (⚠️/💡/✓) 카톡에 추가 | [notifier/__init__.py:_freshness_line](notifier/__init__.py) |
 
 ---
 
