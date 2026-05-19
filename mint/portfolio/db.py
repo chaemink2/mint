@@ -319,6 +319,145 @@ def mark_expiry_notified(signal_ids: List[int]) -> None:
         )
 
 
+def _evaluate_single_outcome(sig: dict) -> Optional[dict]:
+    """단일 시그널 outcome 평가. 시간 미경과 or 데이터 부족 시 None.
+
+    반환: {'outcome', 'outcome_max', 'outcome_min', 'first_hit'} 또는 None
+    - outcome: 'WIN' (target 먼저 도달), 'LOSS' (stop 먼저), 'TIME_EXIT' (둘 다 안 도달)
+    """
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+    from config.settings import config as _cfg
+    from data import krx_client as _krx
+
+    try:
+        created = _dt.fromisoformat(sig["created_at"])
+    except Exception:
+        return None
+    horizon_h = _cfg.signal.max_hold_hours
+    if _dt.now() < created + _td(hours=horizon_h):
+        return None
+
+    target = sig.get("target_price")
+    stop = sig.get("stop_price")
+    ref = sig.get("ref_price")
+    if not target or not stop or not ref:
+        return None
+
+    if sig.get("market") not in ("KOSPI", "KOSDAQ"):
+        return None
+
+    try:
+        bars = _krx.fetch_daily_bars(sig["ticker"], sig["market"], days=5)
+    except Exception:
+        return None
+    if bars is None or bars.empty:
+        return None
+
+    bars = bars.copy()
+    bars["ts_local"] = pd.to_datetime(bars["ts_local"])
+    after = bars[bars["ts_local"] > created]
+    if after.empty:
+        return None
+
+    horizon_days = max(1, horizon_h // 24)
+    after = after.head(horizon_days).reset_index(drop=True)
+
+    max_h = float(after["high"].max())
+    min_l = float(after["low"].min())
+    last_close = float(after["close"].iloc[-1])
+
+    outcome = "TIME_EXIT"
+    # 같은 봉에서 둘 다 터치하면 보수적으로 LOSS (백테스트 관례)
+    for _, bar in after.iterrows():
+        hi, lo = float(bar["high"]), float(bar["low"])
+        if lo <= stop and hi >= target:
+            outcome = "LOSS"
+            break
+        if lo <= stop:
+            outcome = "LOSS"
+            break
+        if hi >= target:
+            outcome = "WIN"
+            break
+
+    return {
+        "outcome": outcome,
+        "outcome_max": max_h,
+        "outcome_min": min_l,
+        "outcome_close": last_close,
+    }
+
+
+import pandas as pd  # outcome 평가용
+
+
+def evaluate_pending_outcomes(limit: int = 50) -> int:
+    """미평가(outcome IS NULL) 시그널들 중 시간 경과한 것 일괄 평가.
+    반환: 새로 평가된 시그널 수.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM signals
+               WHERE outcome IS NULL AND signal_type='BUY'
+                 AND created_at IS NOT NULL
+               ORDER BY created_at ASC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        pending = [dict(r) for r in rows]
+
+    evaluated = 0
+    for sig in pending:
+        result = _evaluate_single_outcome(sig)
+        if result is None:
+            continue
+        with get_conn() as conn:
+            conn.execute(
+                """UPDATE signals
+                   SET outcome=?, outcome_max=?, outcome_min=?,
+                       outcome_evaluated_at=?
+                   WHERE id=?""",
+                (
+                    result["outcome"],
+                    result["outcome_max"],
+                    result["outcome_min"],
+                    datetime.now().isoformat(),
+                    sig["id"],
+                ),
+            )
+        evaluated += 1
+    return evaluated
+
+
+def get_outcome_stats(days: int = 30) -> dict:
+    """최근 days일 시그널의 outcome 분포 + win rate."""
+    since = (datetime.now() - timedelta(days=days)).isoformat()
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT outcome, COUNT(*) as n FROM signals
+               WHERE signal_type='BUY' AND created_at >= ?
+                 AND outcome IS NOT NULL
+               GROUP BY outcome""",
+            (since,),
+        ).fetchall()
+
+    counts = {r["outcome"]: r["n"] for r in rows}
+    win = counts.get("WIN", 0)
+    loss = counts.get("LOSS", 0)
+    time_exit = counts.get("TIME_EXIT", 0)
+    total = win + loss + time_exit
+    win_rate = (win / total) if total else None
+    return {
+        "days": days,
+        "total": total,
+        "win": win,
+        "loss": loss,
+        "time_exit": time_exit,
+        "win_rate": win_rate,
+    }
+
+
 def mark_signal_acted(signal_id: int) -> None:
     with get_conn() as conn:
         conn.execute(

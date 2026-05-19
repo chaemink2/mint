@@ -32,10 +32,16 @@
 ### 다음에 검토할 카드 (우선순위)
 1. ~~**A. 일봉 시그널 + KIS 현재가 신선도 검증**~~ ✅ 2026-05-19 완료
    - [notifier/__init__.py `_freshness_line`](notifier/__init__.py) — 카톡 메시지에 KIS 현재가 + drift 마커
-   - 위로 stale → ⚠️ 엔트리 늦음, 아래로 stale → 💡 더 좋은 진입, 그 사이 → ✓ 신선
-   - 임계값: `MINT_REF_STALE_PCT` (기본 0.008 = 0.8%)
-   - KIS 키 없으면 graceful no-op (기존 메시지 유지)
-2. **B. KIS 분봉 룰 신설 (1~2주 작업)** — 진정한 장중 시그널. **1순위로 승격.**
+2. ~~**B. KIS 분봉 룰 + 만료 노티 + Outcome 트래킹**~~ ✅ 2026-05-19 완료
+   - **B1**: [engine/signals/minute_rule.py](engine/signals/minute_rule.py) — 거래량 spike + 단기 모멘텀 + 양봉 AND
+     - 일봉 룰+ML 통과 종목만 분봉 fetch (호출 한도 안전)
+     - 활성화: `MINT_USE_MINUTE_RULE=true` (기본 false)
+   - **B2**: 시그널 만료 카톡 (TIME / TARGET_HIT / STOP_HIT) — scan/catch-up 시작 시 자동
+     - [portfolio/db.py](portfolio/db.py): `expire_stale_signals`, `check_price_expiry`, `unnotified_expired_signals`, `mark_expiry_notified`
+   - **B3**: Outcome 자동 평가 + 누적 win rate 일일 요약 표시
+     - [portfolio/db.py](portfolio/db.py): `evaluate_pending_outcomes`, `get_outcome_stats`
+     - `python mint/main.py outcomes` 단발 명령 또는 daily-summary 시 자동
+     - **재학습 데이터 자동 축적** — 실 운영 데이터로 모델 개선 가능
    - KIS endpoint: `inquire-time-itemchartprice` (1/3/5/10/15/30/60분봉)
    - 룰 후보: 5분봉 거래량 spike(20봉 평균 ×3), 5/10일선 돌파, 갭상승 후 보합/상승
    - 일봉 룰과 AND 조건으로 결합 → 신호 폭 ↓ 정밀도 ↑
@@ -248,6 +254,9 @@ mint/
 | 2026-05-19 | 종목명 fetch에 Naver 폴백 (pykrx 인증 영향) | [data/krx_client.py:get_stock_name](data/krx_client.py) |
 | 2026-05-19 | 카톡 메시지 표기 정직성 개선 — "예상" → "모멘텀", action/reason 한국어 | [notifier/__init__.py](notifier/__init__.py) |
 | 2026-05-19 | 카드 A 완료: KIS 현재가 신선도 마커 (⚠️/💡/✓) 카톡에 추가 | [notifier/__init__.py:_freshness_line](notifier/__init__.py) |
+| 2026-05-19 | 카드 B1 완료: KIS 분봉 룰 신설 (거래량 spike + 단기 모멘텀 + 양봉) | [engine/signals/minute_rule.py](engine/signals/minute_rule.py) |
+| 2026-05-19 | 카드 B2 완료: 시그널 만료 카톡 (TIME/TARGET_HIT/STOP_HIT) — '죽은 시그널 매수' 방지 | [portfolio/db.py:check_price_expiry](portfolio/db.py), [notifier:notify_expired_signals](notifier/__init__.py) |
+| 2026-05-19 | 카드 B3 완료: 시그널 outcome 자동 평가 + 일일 요약에 누적 win rate | [portfolio/db.py:evaluate_pending_outcomes](portfolio/db.py) |
 
 ---
 
@@ -310,6 +319,12 @@ KAKAO_REDIRECT_URI=https://localhost  # 카카오 콘솔 등록 URL과 동일해
 KAKAO_TOKEN_PATH=mint/data/.kakao_token.json
 MINT_NOTIFY_ENABLED=true
 MINT_NOTIFY_MAX_PER_RUN=5         # 1회 스캔당 개별 발송 최대 건수
+
+# 분봉 룰 (장중 시그널 정밀도)
+MINT_USE_MINUTE_RULE=false        # true면 KIS 분봉 룰 AND 결합 (KIS 키 필수)
+MINT_MIN_MINUTE_VOL_SPIKE=3.0
+MINT_MINUTE_SHORT_WINDOW=5
+MINT_MINUTE_LONG_WINDOW=20
 
 # (보류) 비즈 알림톡
 KAKAO_TEMPLATE_ID=

@@ -21,6 +21,7 @@ from config.settings import config
 from portfolio.db import (
     init_db, migrate_db, expire_stale_signals, get_open_positions,
     check_price_expiry, unnotified_expired_signals, mark_expiry_notified,
+    evaluate_pending_outcomes, get_outcome_stats,
 )
 from engine.signals.rule_scanner import run_rule_scan
 from engine.signals.exit_strategy import evaluate_positions
@@ -186,10 +187,32 @@ def cmd_daemon():
         log.info("Mint daemon stopped")
 
 
-def cmd_daily_summary():
-    """장 마감 후 1회: 오늘 매수 시그널/포지션/매도권고 요약 카톡."""
+def cmd_outcomes():
+    """미평가 시그널의 24h 후 outcome (WIN/LOSS/TIME_EXIT) 일괄 평가."""
     init_db()
     migrate_db()
+    n = evaluate_pending_outcomes(limit=200)
+    log.info("Outcome evaluated: %d signal(s)", n)
+    s7 = get_outcome_stats(days=7)
+    s30 = get_outcome_stats(days=30)
+    log.info(
+        "Win rate — 7d: %s (%d/%d), 30d: %s (%d/%d)",
+        f"{s7['win_rate']:.2%}" if s7['win_rate'] is not None else "n/a",
+        s7['win'], s7['total'],
+        f"{s30['win_rate']:.2%}" if s30['win_rate'] is not None else "n/a",
+        s30['win'], s30['total'],
+    )
+
+
+def cmd_daily_summary():
+    """장 마감 후 1회: 오늘 매수 시그널/포지션/매도권고 + 누적 win rate 카톡."""
+    init_db()
+    migrate_db()
+
+    # outcome 평가 먼저 (24h 지난 시그널들 자동 채움)
+    evaluated = evaluate_pending_outcomes(limit=200)
+    if evaluated:
+        log.info("Outcomes evaluated for %d signal(s)", evaluated)
 
     from datetime import datetime, timedelta
     from portfolio.db import get_conn
@@ -214,9 +237,25 @@ def cmd_daily_summary():
     for a in non_hold[:3]:
         extra.append(f"  · {a.action} {a.name or a.ticker} ({a.profit_pct:+.2f}%)")
 
+    # 누적 win rate (최근 7일, 30일)
+    s7 = get_outcome_stats(days=7)
+    s30 = get_outcome_stats(days=30)
+    stats_lines = []
+    if s7["total"]:
+        stats_lines.append(
+            f"📈 최근 7일 Win rate: {s7['win_rate']*100:.0f}% "
+            f"(W{s7['win']}/L{s7['loss']}/T{s7['time_exit']})"
+        )
+    if s30["total"]:
+        stats_lines.append(
+            f"📈 최근 30일 Win rate: {s30['win_rate']*100:.0f}% "
+            f"(W{s30['win']}/L{s30['loss']}/T{s30['time_exit']})"
+        )
+
     log.info(
-        "Daily summary: BUY=%d, positions=%d, exit_advices(non-HOLD)=%d",
+        "Daily summary: BUY=%d, positions=%d, exit_advices(non-HOLD)=%d, 7d_win=%s",
         buy_today, len(positions), len(non_hold),
+        f"{s7['win_rate']:.2%}" if s7['win_rate'] is not None else "n/a",
     )
     try:
         from notifier import send_daily_summary
@@ -224,7 +263,7 @@ def cmd_daily_summary():
             buy_count=buy_today,
             open_positions=len(positions),
             exit_actions=len(non_hold),
-            extra_lines=extra or None,
+            extra_lines=(extra + stats_lines) or None,
         )
     except Exception as e:
         log.warning("daily summary notify failure: %s", e)
@@ -269,7 +308,7 @@ def main():
         "command",
         nargs="?",
         default="scan",
-        choices=["scan", "catch-up", "daemon", "backtest", "train", "daily-summary"],
+        choices=["scan", "catch-up", "daemon", "backtest", "train", "daily-summary", "outcomes"],
         help="scan (default): one-shot KR rule scan",
     )
     parser.add_argument("--markets", nargs="+", default=None,
@@ -298,6 +337,8 @@ def main():
         cmd_daemon()
     elif args.command == "daily-summary":
         cmd_daily_summary()
+    elif args.command == "outcomes":
+        cmd_outcomes()
     elif args.command == "backtest":
         markets = args.markets or ["KOSPI", "KOSDAQ"]
         cmd_backtest([m.upper() for m in markets], args.days, args.max_hold_days)
