@@ -3,7 +3,7 @@
 > **용도**: Claude Code / Claude App이 이후 작업·검토할 때, Cursor 세션에서 바뀐 점만 빠르게 파악하기 위한 문서.  
 > **전체 맥락·로드맵**은 `CLAUDE.md`를 먼저 읽을 것.
 
-**마지막 업데이트**: 2026-05-17 (Claude — Step 2b/2c/3b/4/7 + 동적 워치리스트)
+**마지막 업데이트**: 2026-05-19 (Claude — Naver universe 폴백, 16피처, 카카오톡 알림 일체, 분봉 룰, 만료 알림, outcome 자동 평가)
 
 ---
 
@@ -145,6 +145,8 @@ CURSOR.md와 CLAUDE.md를 읽고 Cursor가 Step 2에서 한 변경을 검토해�
 |------|--------|------|
 | 2026-05-16 | Cursor | 최초 작성 — Step 2 E2E, 교차 검토 반영, 알림톡 미승인 |
 | 2026-05-17 | Claude | Step 2b/2c/3b/4/7 + 동적 워치리스트. LightGBM Val AUC 0.528 (데이터 부족). 자세한 내용은 `CLAUDE.md` 「학습 결과 기록」 / 「다음 세션 픽업」 |
+| 2026-05-18 | Claude | KRX 인증 우회(Naver Finance), 100종목 학습 → AUC 0.594, 16피처 확장(+0.002), 필터 날카로움 검증, 카카오톡 '나에게 보내기' 알림 + 하트비트 + 일일 요약, 종목명 fetch Naver 폴백, 메시지 표기 정직화, Windows 작업 스케줄러 자동화 |
+| 2026-05-19 | Claude | 카드 A 완료(KIS 현재가 신선도 마커), 카드 B1(분봉 룰)/B2(시그널 만료 알림)/B3(outcome 자동 평가 + 누적 win rate) 완료. CURSOR 검토 위임 준비. |
 
 ---
 
@@ -191,4 +193,75 @@ Cursor가 제안했던 다음 우선순위(1~5번)를 Claude 세션에서 실행
 1. **KRX cross-sectional API 장애** — `get_market_cap_by_ticker` 등이 `Service unavailable`. 동적 워치리스트 실패. 개별 OHLCV는 정상.
 2. **LightGBM AUC 0.528** — 사실상 노이즈. 데이터 확대 + 전략 재검토 필요. (`CLAUDE.md` 「학습 결과 기록」)
 3. **백테스트 손익비 비대칭** — 손절 79건 vs 익절 37건. `target_return=+3.5%` vs `stop_loss=-2%`의 비대칭(0.57:1) 검토 필요.
+
+---
+
+## 🤖 Claude 추가 작업 (2026-05-18 ~ 2026-05-19)
+
+### 핵심 변경 요약
+
+| 영역 | 변경 |
+|---|---|
+| **데이터** | Naver Finance 폴백 (universe, 종목명) — pykrx 1.2.8 KRX 인증 도입 우회 |
+| **피처** | 11 → 16 (bb_position, obv_slope, gap_pct, regime_trend, turnover_pct60). gap_pct만 의미 기여, 나머지 4개는 기존과 정보 중복 |
+| **모델** | 100종목·365일 재학습 — AUC 0.528 → 0.594, Best iter 7 → 85. Confidence 0.70 임계값에서 매일 6.4개·precision 0.78·lift 1.88× |
+| **알림** | 카카오톡 "나에게 보내기" (talk_message scope) — 비즈 알림톡 보류는 유지. 토큰 자동 refresh. 하트비트 + 일일 요약 |
+| **신선도** | 매수 메시지에 KIS 현재가 + drift 마커 (⚠️ 엔트리 늦음 / 💡 더 좋은 진입 / ✓ 신선) |
+| **분봉** | KIS 5분봉 룰 — 거래량 spike + 단기 모멘텀 + 양봉. 일봉 룰+ML 통과한 종목만 평가 (AND) |
+| **만료** | 시그널 만료 카톡 (TIME / TARGET_HIT / STOP_HIT) — '죽은 시그널 매수' 방지 |
+| **Outcome** | 24h 후 시그널 outcome 자동 평가 (WIN/LOSS/TIME_EXIT). 일일 요약에 누적 win rate. 재학습 데이터 자동 축적 |
+| **운영** | Windows 작업 스케줄러 평일 08:30 + 10분 간격 scan + 15:35 daily-summary |
+
+### 신규 파일 (5/18~5/19)
+
+| 파일 | 역할 |
+|---|---|
+| `notifier/kakao.py` | 카카오톡 '나에게 보내기' 클라이언트 + 토큰 자동 refresh |
+| `notifier/setup_kakao.py` | 1회 인가 헬퍼 |
+| `engine/signals/minute_rule.py` | KIS 분봉 룰 (거래량 spike + 모멘텀 + 양봉 AND) |
+
+### 수정 파일 (5/18~5/19)
+
+| 파일 | 변경 |
+|---|---|
+| `data/universe.py` | Naver Finance HTML 스크래핑 추가 (KRX_ID 있으면 pykrx, 없으면 Naver) |
+| `data/krx_client.py` | `get_stock_name`에 Naver 폴백 + 캐시 (`.stock_names.json`) |
+| `data/kis_client.py` | `get_minute_bars(ticker)` 추가 (분봉 fetch) |
+| `engine/features.py` | 11 → 16 피처 |
+| `engine/signals/rule_scanner.py` | 분봉 룰 AND 결합 (use_minute_rule=True 시) |
+| `notifier/__init__.py` | notify_buy_signals/exit_advices/expired_signals + heartbeat + daily_summary + freshness + minute marker |
+| `portfolio/db.py` | 마이그레이션 추가: expiry_reason/notified/price, outcome/max/min/evaluated_at. check_price_expiry, evaluate_pending_outcomes, get_outcome_stats |
+| `main.py` | `daily-summary` / `outcomes` 명령, `_process_expiries`, daemon에 15:35 cron 추가 |
+| `config/settings.py` | KakaoConfig 확장(redirect_uri, token_path), use_minute_rule + min_minute_vol_spike + short/long window |
+| `.gitignore` | `.kakao_token.json`, `.notifier_state.json`, `.stock_names.json` 추가 (보안) |
+
+### Cursor가 검토하면 좋은 핵심 항목
+
+1. **운영 안정성** — 작업 스케줄러에서 매 10분 호출 시 다음 사항이 견고한가:
+   - `_process_expiries()` 가 부분 실패해도 scan 본체는 진행되는가
+   - KIS 토큰 자동 재발급 race condition (`_TOKEN_LOCK` 보호 충분한가)
+   - 카카오 send 실패 시 비즈니스 로직(시그널 DB 저장)에는 영향 없는가
+2. **보안** — `data/.kakao_token.json` / `.kis_token.json` / `.stock_names.json` 가 모두 `.gitignore` 에 들어있는가. log에 토큰 노출이 없는가.
+3. **데이터 정합** — `evaluate_pending_outcomes` 의 first-hit 판정:
+   - 같은 봉에서 high≥target & low≤stop이면 LOSS로 보수적 판정 (의도). 사용자 정책에 맞는가?
+   - `created_at` 시점에 이미 일봉이 있을 수 있는데 (시그널이 장 마감 직전 발생) — `bars[ts_local > created]` 필터가 첫 봉을 누락시키지 않는가?
+4. **메시지 200자 제한** — freshness line 추가로 매수 메시지가 늘어남. KIS 응답 길어지면 truncate 가능성?
+5. **`_estimate_expected_return_1d`** 휴리스틱과 사용자가 받는 메시지 "모멘텀" 사이 정직성. 이미 표기는 정직화했으나 사용자 멘탈모델과 일치하는지 점검.
+6. **분봉 룰 임계값 검증 부재** — `vol_spike ≥ 3.0` 등은 단위 테스트만으로 가정. 실제 KOSPI/KOSDAQ 분봉에서 적절한 값인지 백테스트 필요. (현재 KIS 분봉 백테스트 인프라 없음)
+7. **outcome 평가 KRX 일봉 의존** — pykrx의 개별 일봉은 인증 불필요로 동작 중이지만, KRX 정책 추가 변경 시 영향 평가.
+8. **사용자 외출 시나리오** — 만료 알림이 새 시그널 알림보다 *먼저* 가야 함. 현재 `_process_expiries()`가 `run_rule_scan()` 앞에 있음. OK.
+
+### Cursor 검토 결과 출력 위치
+
+`mint/REVIEW_CURSOR.md` (새 파일)에 정리해주면 됨. CLAUDE.md/CURSOR.md는 핸드오프 문서이므로 직접 수정은 자제 — 변경 제안만 REVIEW에 적고, 사용자가 승인 시 Claude/Cursor가 반영.
+
+### Cursor에게 권장 작업 (CLAUDE.md 다음 카드 외)
+
+| 우선 | 작업 |
+|---|---|
+| 1 | 위 검토 항목 8가지 audit |
+| 2 | 분봉 룰 임계값 백테스트 — KIS 분봉 1주일치 다운로드해서 vol_spike 분포 확인 |
+| 3 | catch-up 시점에 `_process_expiries()`도 자동 호출 중인지 main.py 흐름 재검토 |
+| 4 | 카카오 send 메시지 sequence (heartbeat → expiry → buy → daily_summary) 의 순서 일관성 검증 |
+| 5 | CLAUDE.md 「학습 결과 기록」의 5/18b/c/d/e 수치 재현 가능한지 확인 (training_data CSV가 git ignored이므로 재학습 + 재계산 필요할 수 있음) |
 
