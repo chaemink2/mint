@@ -309,6 +309,7 @@ mint/
 | 2026-05-20 | **카드 a 완료**: KOSPI/KOSDAQ 지수 등락률 (Naver 모바일 API) — 일일 요약/하트비트/미드데이에 한 줄 추가 | [data/market_index.py](data/market_index.py) |
 | 2026-05-20 | **카드 b 완료**: 스캔 funnel 통계 — 매 scan 단계별 통과 카운트 누적 → 일일 요약에 "평가 X → 모멘텀 Y → … → 시그널 Z" 표시 | [engine/signals/rule_scanner.py](engine/signals/rule_scanner.py), [notifier:accumulate_scan_stats](notifier/__init__.py) |
 | 2026-05-20 | **카드 c 완료**: 미드데이 ping (12:00 한 번) — 약세장 등 시그널 0건 사유 자동 진단 | [notifier:maybe_send_midday_ping](notifier/__init__.py) |
+| 2026-05-20 | **카드 d/e/f/g 완료**: 대시보드 통합 리프레시 — 시장지수+funnel+outcome trend(d), 보유 포지션 P&L 게이지(e), 모델 분석 페이지+confidence 슬라이더+feature importance(f), 모바일 친화 레이아웃(g) | [dashboard/app.py](dashboard/app.py) |
 
 ---
 
