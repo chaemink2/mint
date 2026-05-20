@@ -192,17 +192,51 @@ def _save_state(state: dict) -> None:
         log.debug("notifier state save failed: %s", e)
 
 
+_STATE_LOCK_PATH = _HEARTBEAT_STATE + ".lock"
+_STATE_LOCK_TIMEOUT = 5.0
+
+
+def _state_lock():
+    """간단한 cross-process file lock (Windows/Linux 호환).
+    여러 scan이 같은 시각에 끝날 때 _save_state race 방지.
+    """
+    import time
+    deadline = time.time() + _STATE_LOCK_TIMEOUT
+    while time.time() < deadline:
+        try:
+            fd = os.open(_STATE_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return True
+        except FileExistsError:
+            time.sleep(0.05)
+    return False
+
+
+def _state_unlock():
+    try:
+        os.remove(_STATE_LOCK_PATH)
+    except FileNotFoundError:
+        pass
+
+
 def accumulate_scan_stats(stats: dict) -> None:
-    """rule_scanner가 매 scan 끝날 때 호출. 오늘 누적 funnel에 더함."""
-    state = _load_state()
-    today = datetime.now().strftime("%Y-%m-%d")
-    key = f"scan_stats_{today}"
-    cur = state.get(key, {})
-    for k, v in stats.items():
-        cur[k] = cur.get(k, 0) + v
-    cur["scans"] = cur.get("scans", 0) + 1
-    state[key] = cur
-    _save_state(state)
+    """rule_scanner가 매 scan 끝날 때 호출. 오늘 누적 funnel에 더함.
+    여러 scan 동시 종료 시 file lock으로 race 방지.
+    """
+    locked = _state_lock()
+    try:
+        state = _load_state()
+        today = datetime.now().strftime("%Y-%m-%d")
+        key = f"scan_stats_{today}"
+        cur = state.get(key, {})
+        for k, v in stats.items():
+            cur[k] = cur.get(k, 0) + v
+        cur["scans"] = cur.get("scans", 0) + 1
+        state[key] = cur
+        _save_state(state)
+    finally:
+        if locked:
+            _state_unlock()
 
 
 def get_today_scan_stats() -> dict:

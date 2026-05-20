@@ -28,6 +28,7 @@ data/mint.db-journal
 data/.kis_token.json
 data/.kakao_token.json
 data/.notifier_state.json
+data/.notifier_state.json.lock
 data/.universe_cache.json
 data/.stock_names.json
 data/raw/*

@@ -329,6 +329,8 @@ mint/
 | 2026-05-20 | **카드 b 완료**: 스캔 funnel 통계 — 매 scan 단계별 통과 카운트 누적 → 일일 요약에 "평가 X → 모멘텀 Y → … → 시그널 Z" 표시 | [engine/signals/rule_scanner.py](engine/signals/rule_scanner.py), [notifier:accumulate_scan_stats](notifier/__init__.py) |
 | 2026-05-20 | **카드 c 완료**: 미드데이 ping (12:00 한 번) — 약세장 등 시그널 0건 사유 자동 진단 | [notifier:maybe_send_midday_ping](notifier/__init__.py) |
 | 2026-05-20 | **카드 d/e/f/g 완료**: 대시보드 통합 리프레시 — 시장지수+funnel+outcome trend(d), 보유 포지션 P&L 게이지(e), 모델 분석 페이지+confidence 슬라이더+feature importance(f), 모바일 친화 레이아웃(g) | [dashboard/app.py](dashboard/app.py) |
+| 2026-05-20 | **Cursor 3차 검토 R2~R6 반영**: 대시보드 caption 보강(R2), P&L gauge edge case 가드(R3), accumulate_scan_stats file lock(R4), validate_filters.py 스크립트(R5), TZ 유틸 Cloud 선행(R6) | [REVIEW_CURSOR.md](REVIEW_CURSOR.md) Section G |
+| 2026-05-20 | **mock state cleanup**: `.notifier_state.json`의 `scan_stats_2026-05-21`은 카드 c 검증 시 잔여 mock 데이터. 실제 5/21 시그널 0건 (DB 확인). 정리 완료 | data/.notifier_state.json |
 
 ---
 

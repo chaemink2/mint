@@ -413,27 +413,39 @@ elif page == "💼 보유 포지션":
         ):
             c1, c2 = st.columns([2, 1])
             with c1:
-                # P&L 진행 게이지: stop ~ buy ~ target 사이에서 현재가 위치
-                fig = go.Figure(go.Indicator(
-                    mode="gauge+number+delta",
-                    value=cur,
-                    delta={"reference": buy, "valueformat": ",.0f"},
-                    number={"valueformat": ",.0f"},
-                    gauge={
-                        "axis": {"range": [stop * 0.99, target * 1.01] if target and stop else None},
+                # P&L 진행 게이지 — edge case 방어
+                valid_range = (
+                    target is not None and stop is not None
+                    and target > stop > 0 and buy > 0
+                )
+                gauge_kwargs = {
+                    "mode": "gauge+number+delta",
+                    "value": cur,
+                    "delta": {"reference": buy, "valueformat": ",.0f"},
+                    "number": {"valueformat": ",.0f"},
+                    "title": {"text": f"현재가 (매수 {buy:,.0f})"},
+                }
+                if valid_range:
+                    gauge_kwargs["gauge"] = {
+                        "axis": {"range": [stop * 0.99, target * 1.01]},
                         "bar": {"color": "#3fb950" if pct >= 0 else "#f85149"},
                         "steps": [
                             {"range": [stop, buy], "color": "rgba(248, 81, 73, 0.2)"},
                             {"range": [buy, target], "color": "rgba(63, 185, 80, 0.2)"},
-                        ] if target and stop and target > stop else [],
+                        ],
                         "threshold": {
                             "line": {"color": "white", "width": 2},
                             "thickness": 0.75,
                             "value": buy,
                         },
-                    },
-                    title={"text": f"현재가 (매수 {buy:,.0f})"},
-                ))
+                    }
+                else:
+                    # target/stop 데이터 이상 시 단순 number indicator로 폴백
+                    gauge_kwargs["mode"] = "number+delta"
+                    st.warning(
+                        "포지션의 target/stop 데이터에 이상이 있어 게이지를 표시할 수 없습니다."
+                    )
+                fig = go.Figure(go.Indicator(**gauge_kwargs))
                 fig.update_layout(height=240, margin=dict(l=10, r=10, t=30, b=10),
                                   paper_bgcolor="rgba(0,0,0,0)")
                 st.plotly_chart(fig, use_container_width=True)
@@ -506,7 +518,9 @@ elif page == "🧠 모델 분석":
         st.markdown("### 임계값 시뮬레이션")
         st.caption(
             "슬라이더를 움직이면 해당 임계값에서의 시그널 수, precision, "
-            "lift를 미리 볼 수 있습니다. (validation set 기준)"
+            "lift를 미리 볼 수 있습니다. (validation set 기준)  \n"
+            "⚠️ 이 수치는 **분봉 룰·dedup·장중 stale 미반영**입니다. "
+            "실 운영 카톡 도착 수와 다를 수 있어요."
         )
 
         thr = st.slider("ML confidence 임계값", 0.30, 0.95,
