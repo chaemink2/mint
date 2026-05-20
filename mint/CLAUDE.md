@@ -306,6 +306,9 @@ mint/
 | 2026-05-19 | **Cursor 검토 P2 반영**: cmd_scan_us 만료 처리 추가, rule_scanner에 max_daily_buys 한도 적용 | [main.py:cmd_scan_us](main.py), [rule_scanner.run_rule_scan](engine/signals/rule_scanner.py) |
 | 2026-05-19 | **Cursor 검토 P3 반영**: 매수 메시지 핵심 정보 위로 + 라인 단위 truncate (200자 안전) | [notifier/kakao.py:_truncate](notifier/kakao.py), [notifier/__init__.py:_format_buy_signal](notifier/__init__.py) |
 | 2026-05-19 | **카드 E 완료**: 200종목 × 730일 학습 → AUC 0.551→0.582, 임계값 0.60 일평균 0.7→1.3 (운영 가능 수준) | 학습결과 5/19c |
+| 2026-05-20 | **카드 a 완료**: KOSPI/KOSDAQ 지수 등락률 (Naver 모바일 API) — 일일 요약/하트비트/미드데이에 한 줄 추가 | [data/market_index.py](data/market_index.py) |
+| 2026-05-20 | **카드 b 완료**: 스캔 funnel 통계 — 매 scan 단계별 통과 카운트 누적 → 일일 요약에 "평가 X → 모멘텀 Y → … → 시그널 Z" 표시 | [engine/signals/rule_scanner.py](engine/signals/rule_scanner.py), [notifier:accumulate_scan_stats](notifier/__init__.py) |
+| 2026-05-20 | **카드 c 완료**: 미드데이 ping (12:00 한 번) — 약세장 등 시그널 0건 사유 자동 진단 | [notifier:maybe_send_midday_ping](notifier/__init__.py) |
 
 ---
 

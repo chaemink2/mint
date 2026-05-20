@@ -192,6 +192,77 @@ def _save_state(state: dict) -> None:
         log.debug("notifier state save failed: %s", e)
 
 
+def accumulate_scan_stats(stats: dict) -> None:
+    """rule_scanner가 매 scan 끝날 때 호출. 오늘 누적 funnel에 더함."""
+    state = _load_state()
+    today = datetime.now().strftime("%Y-%m-%d")
+    key = f"scan_stats_{today}"
+    cur = state.get(key, {})
+    for k, v in stats.items():
+        cur[k] = cur.get(k, 0) + v
+    cur["scans"] = cur.get("scans", 0) + 1
+    state[key] = cur
+    _save_state(state)
+
+
+def get_today_scan_stats() -> dict:
+    state = _load_state()
+    today = datetime.now().strftime("%Y-%m-%d")
+    return state.get(f"scan_stats_{today}", {})
+
+
+def maybe_send_midday_ping(markets: List[str]) -> bool:
+    """점심시간(11:50~13:00) 첫 scan에서 1회. 오전 시그널 수 + 시장 + funnel 핵심.
+    사용자 외출 중에도 '시스템 살아있고 약세장이라 시그널 적다' 같은 가시성 제공.
+    """
+    if not _enabled():
+        return False
+    now = datetime.now()
+    if not (11 <= now.hour <= 13):
+        return False
+    if now.hour == 13 and now.minute > 0:
+        return False
+    today = now.strftime("%Y-%m-%d")
+    state = _load_state()
+    if state.get("last_midday_date") == today:
+        return False
+
+    from notifier import kakao
+    try:
+        from data.market_index import format_summary_line
+        market_line = format_summary_line()
+    except Exception:
+        market_line = None
+
+    # 오늘 오전까지의 funnel
+    fs = state.get(f"scan_stats_{today}", {})
+    signals = fs.get("signals_created", 0)
+    scans = fs.get("scans", 0)
+
+    lines = [
+        f"🕛 Mint 미드데이 — {now.strftime('%H:%M')}",
+    ]
+    if market_line:
+        lines.append(market_line)
+    lines.append(f"오전 스캔 {scans}회 · 시그널 {signals}건")
+    if signals == 0 and scans > 0:
+        # 어디서 막혔는지 한 줄
+        if fs.get("passed_momentum", 0) == 0:
+            lines.append("→ 거의 모든 종목이 모멘텀 부족 (약세장)")
+        elif fs.get("passed_ml", 0) == 0 and fs.get("passed_volume", 0) > 0:
+            lines.append("→ 룰은 통과하나 ML 점수 미달")
+        elif fs.get("passed_minute", 0) == 0 and fs.get("passed_ml", 0) > 0:
+            lines.append("→ ML 통과했으나 분봉 패턴 미충족")
+    lines.append("시스템 정상 동작 중")
+
+    ok = kakao.send_text("\n".join(lines))
+    if ok:
+        state["last_midday_date"] = today
+        _save_state(state)
+        log.info("Midday ping sent for %s", today)
+    return ok
+
+
 def maybe_send_heartbeat(markets: List[str]) -> bool:
     """오늘 처음 스캔이면 하트비트 1통. 이미 보냈으면 skip."""
     if not _enabled():
@@ -202,13 +273,21 @@ def maybe_send_heartbeat(markets: List[str]) -> bool:
         return False
 
     from notifier import kakao
+    try:
+        from data.market_index import format_summary_line
+        market_line = format_summary_line()
+    except Exception:
+        market_line = None
+
     now = datetime.now().strftime("%H:%M")
-    msg = (
-        f"🟢 Mint 시작 — {today} {now}\n"
-        f"오늘의 자동 스캔 가동 (대상: {', '.join(markets)})\n"
-        f"새 시그널이 잡히면 이 채팅으로 알려드립니다."
-    )
-    ok = kakao.send_text(msg)
+    lines = [
+        f"🟢 Mint 시작 — {today} {now}",
+        f"대상: {', '.join(markets)}",
+    ]
+    if market_line:
+        lines.append(market_line)
+    lines.append("새 시그널이 잡히면 이 채팅으로 알려드립니다.")
+    ok = kakao.send_text("\n".join(lines))
     if ok:
         state["last_heartbeat_date"] = today
         _save_state(state)

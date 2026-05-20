@@ -116,9 +116,15 @@ def _ml_probability(df: pd.DataFrame) -> Optional[float]:
     return model.predict_proba(feats)
 
 
-def evaluate_ticker(ticker: str, market: str, df: pd.DataFrame) -> Optional[dict]:
+def evaluate_ticker(
+    ticker: str, market: str, df: pd.DataFrame, stats: Optional[dict] = None
+) -> Optional[dict]:
+    """단일 ticker 평가. stats dict 전달 시 단계별 통과 카운트 누적 (funnel 분석용)."""
     if df is None or len(df) < 25:
         return None
+
+    if stats is not None:
+        stats["evaluated"] = stats.get("evaluated", 0) + 1
 
     sig = config.signal
     expected = _estimate_expected_return_1d(df)
@@ -129,15 +135,25 @@ def evaluate_ticker(ticker: str, market: str, df: pd.DataFrame) -> Optional[dict
 
     if expected < sig.min_expected_return_1d:
         return None
+    if stats is not None:
+        stats["passed_momentum"] = stats.get("passed_momentum", 0) + 1
+
     if risk > sig.max_risk_score:
         return None
+    if stats is not None:
+        stats["passed_risk"] = stats.get("passed_risk", 0) + 1
+
     if vol_ratio < sig.min_volume_ratio:
         return None
+    if stats is not None:
+        stats["passed_volume"] = stats.get("passed_volume", 0) + 1
 
     # ML 필터 — use_ml_confidence=True일 때만. None이면 룰만으로 통과.
     ml_conf = _ml_probability(df)
     if ml_conf is not None and ml_conf < sig.min_model_confidence:
         return None
+    if stats is not None and ml_conf is not None:
+        stats["passed_ml"] = stats.get("passed_ml", 0) + 1
 
     # 분봉 룰 (use_minute_rule=True일 때만, 일봉+ML 통과 후 AND 결합)
     minute_info = None
@@ -147,6 +163,8 @@ def evaluate_ticker(ticker: str, market: str, df: pd.DataFrame) -> Optional[dict
         if minute_info is None:
             log.debug("Skip %s — 분봉 룰 미통과 또는 KIS 분봉 fetch 실패", ticker)
             return None
+        if stats is not None:
+            stats["passed_minute"] = stats.get("passed_minute", 0) + 1
 
     target_price = ref_price * (1 + sig.target_return)
     stop_price = ref_price * (1 + sig.stop_loss)
@@ -203,6 +221,11 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
     new_ids: List[int] = []
     dedup_hours = config.ops.signal_dedup_hours
 
+    # funnel 통계 — scan 끝나면 notifier state에 누적
+    stats = {"evaluated": 0, "passed_momentum": 0, "passed_risk": 0,
+             "passed_volume": 0, "passed_ml": 0, "passed_minute": 0,
+             "signals_created": 0, "skipped_dedup": 0}
+
     for ticker, df in bars_map.items():
         if len(new_ids) >= remaining:
             log.info("Daily BUY limit hit (%d) — stopping scan", daily_limit)
@@ -213,12 +236,13 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
         if market not in markets:
             continue
 
-        candidate = evaluate_ticker(ticker, market, df)
+        candidate = evaluate_ticker(ticker, market, df, stats=stats)
         if not candidate:
             continue
 
         if db.has_recent_signal(ticker, "BUY", hours=dedup_hours):
             log.debug("Skip %s — recent BUY within %sh", ticker, dedup_hours)
+            stats["skipped_dedup"] += 1
             continue
 
         valid_until = (
@@ -240,6 +264,7 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
             stop_price=candidate["stop_price"],
         )
         new_ids.append(sid)
+        stats["signals_created"] += 1
         ml_info = (
             f" ML={candidate['ml_confidence']:.2f}"
             if candidate.get("ml_confidence") is not None
@@ -255,6 +280,13 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
             candidate["ref_price"],
             ml_info,
         )
+
+    # scan funnel 통계를 notifier state에 누적 — 일일 요약/디버깅용
+    try:
+        from notifier import accumulate_scan_stats
+        accumulate_scan_stats(stats)
+    except Exception as e:
+        log.debug("scan stats accumulate failed: %s", e)
 
     log.info("Rule scan done — %s new signal(s)", len(new_ids))
     return new_ids

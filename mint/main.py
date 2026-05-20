@@ -87,10 +87,11 @@ def cmd_scan():
     if config.ops.enable_us_market_scan:
         markets.append("NASDAQ")
     try:
-        from notifier import maybe_send_heartbeat
+        from notifier import maybe_send_heartbeat, maybe_send_midday_ping
         maybe_send_heartbeat(markets)
+        maybe_send_midday_ping(markets)
     except Exception as e:
-        log.warning("heartbeat failure: %s", e)
+        log.warning("heartbeat/midday failure: %s", e)
 
     # 만료된 시그널 정리 + 알림 (BEFORE new scan: 사용자가 새 시그널 보기 전에 죽은 거 알림)
     _process_expiries()
@@ -243,6 +244,39 @@ def cmd_daily_summary():
     s7 = get_outcome_stats(days=7)
     s30 = get_outcome_stats(days=30)
     stats_lines = []
+
+    # 오늘 시장 지수 (Naver API)
+    try:
+        from data.market_index import format_summary_line
+        idx_line = format_summary_line()
+        if idx_line:
+            stats_lines.append(idx_line)
+    except Exception as e:
+        log.debug("market index fetch failed: %s", e)
+
+    # 오늘 스캔 funnel (카드 b) — 시그널 0건일 때 어디서 막혔는지 보여줌
+    try:
+        from notifier import get_today_scan_stats
+        fs = get_today_scan_stats()
+        if fs.get("scans"):
+            funnel = (
+                f"🔍 오늘 스캔 {fs.get('scans',0)}회: "
+                f"평가 {fs.get('evaluated',0)} → "
+                f"모멘텀 {fs.get('passed_momentum',0)} → "
+                f"리스크 {fs.get('passed_risk',0)} → "
+                f"거래량 {fs.get('passed_volume',0)}"
+            )
+            if fs.get("passed_ml") is not None and fs.get("passed_ml", 0) > 0 or "passed_ml" in fs:
+                funnel += f" → ML {fs.get('passed_ml',0)}"
+            if fs.get("passed_minute", 0) > 0 or "passed_minute" in fs:
+                funnel += f" → 분봉 {fs.get('passed_minute',0)}"
+            funnel += f" → 시그널 {fs.get('signals_created',0)}"
+            if fs.get("skipped_dedup", 0):
+                funnel += f" (중복 skip {fs['skipped_dedup']})"
+            stats_lines.append(funnel)
+    except Exception as e:
+        log.debug("scan funnel fetch failed: %s", e)
+
     if s7["total"]:
         stats_lines.append(
             f"📈 최근 7일 Win rate: {s7['win_rate']*100:.0f}% "
