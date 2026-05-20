@@ -1,32 +1,51 @@
 # Mint 프로젝트 — 핸드오프 / 결정 기록
 
-> **마지막 업데이트**: 2026-05-19 23:55 (Cursor 검토 P1~P3 반영 + 카드 E 200×730 학습. AUC 0.582, 임계값 0.60 일평균 1.3개·precision 0.79. 운영 가능 베타 도달.)
+> **마지막 업데이트**: 2026-05-20 (5/20 운영 첫날 약세장 0건 → 운영 가시성 강화 a/b/c + 대시보드 리프레시 d/e/f/g 완료. Cloud Migration 가이드 작성. Cursor 3차 검토 요청 대기.)
 > **다음 세션 픽업 시**: 아래 [🔁 다음 세션 픽업 가이드](#-다음-세션-픽업-가이드) 부터 읽으세요.
-> **Cursor 변경 이력**: `CURSOR.md` · **Cursor 2차 검토 (5/19)**: `REVIEW_CURSOR.md`
+> **Cursor 변경 이력**: `CURSOR.md` · **Cursor 검토 결과**: `REVIEW_CURSOR.md` · **Cloud 이전 가이드**: `CLOUD_MIGRATION.md`
 
 ---
 
-## 🔁 다음 세션 픽업 가이드 (2026-05-20 이후)
+## 🔁 다음 세션 픽업 가이드 (2026-05-21 이후)
 
 ### 한 줄 요약
-**Cursor 검토 P1~P3 반영 + 카드 E (200종목·730일) 완료. AUC 0.582, 임계값 0.60 일평균 1.3개·precision 0.79 운영 가능 수준. 사용자가 ML 0.60 + 분봉 ON으로 운영 시작. 2026-05-20부터 실제 outcome 누적 — 1~2주 후 실 분포로 재학습이 다음 진짜 카드. 그 사이 카드 C(시장 regime/섹터) 진행 가능.**
+**5/20 운영 첫날 약세장(KOSPI -0.86%, KOSDAQ -2.61%)으로 시그널 0건 — 시스템 보수적 회피 성공. 운영 가시성(시장지수/funnel/미드데이) + 대시보드 통합 리프레시 완료. Cloud Migration 가이드 작성. Cursor 3차 검토 요청 대기 중 (REVIEW_CURSOR.md 끝 부분).**
 
 ### 첫 행동 (다음 세션 시작 시)
 ```powershell
-# 1) 운영 첫날 outcome 보고 받기
+# 1) 어제~오늘 시그널 + outcome 조회
 python -X utf8 mint\main.py outcomes
-#    → "Win rate — 7d: x.xx% (W/L), 30d: ..." 출력
-#    데이터 적으면 still PENDING 많음 — 24h 안 지난 시그널이라
-
-# 2) 어제 시그널 보고 — 카톡으로 받았던 종목들 확인
 python -X utf8 -c "import sys; sys.path.insert(0,'mint'); from portfolio.db import get_conn; from datetime import datetime, timedelta;
-since = (datetime.now() - timedelta(days=2)).isoformat();
+since = (datetime.now() - timedelta(days=3)).isoformat();
 with get_conn() as c:
     rows = c.execute('SELECT id,ticker,name,status,outcome,expiry_reason,created_at FROM signals WHERE created_at >= ? ORDER BY created_at DESC', (since,)).fetchall();
     for r in rows: print(dict(r))"
 
-# 3) 사용자 피드백 받기 — 어떤 시그널이 실제 매수까지 갔는지, 결과 어땠는지
+# 2) Cursor 3차 검토 결과가 REVIEW_CURSOR.md에 있는지 확인
+#    있으면 그 권고 사항 P1/P2... 식으로 분류해서 사용자 승인 받기
+
+# 3) 사용자 피드백 — 5/21 시그널 받았는지, 어떤 메시지 도착했는지, 매수까지 갔는지
 ```
+
+### 5/20까지 작업한 것 (현재 운영 상태)
+- ✅ 운영 안정 (Cursor 검토 P1~P3 반영, 5/19)
+- ✅ 데이터 확대 카드 E (200종목 × 730일, AUC 0.582)
+- ✅ 운영 가시성 카드 a/b/c (시장 지수, 스캔 funnel, 미드데이 ping)
+- ✅ 대시보드 통합 리프레시 d/e/f/g
+- ✅ Cloud Migration 가이드 (`CLOUD_MIGRATION.md`)
+
+### 사용자 운영 환경 (Claude 확인 완료)
+- `MINT_USE_ML_CONFIDENCE=true`, `MINT_USE_MINUTE_RULE=true`, `MINT_MIN_ML_CONFIDENCE=0.60`
+- Windows 작업 스케줄러: `Mint Signal Scan` 1개 (평일 08:30~15:20 10분 간격)
+- ⏳ **사용자 잔여 작업**: `Mint 일일 요약` (15:35) 트리거 미등록 — 이거 등록해야 outcome 자동 평가 + win rate 누적 동작
+
+### 다음 카드 우선순위
+1. **운영 데이터 1~2주 수집** — 진짜 평상시 시그널 패턴 보기
+2. **Cursor 3차 검토 응답 반영** — REVIEW_CURSOR.md 새 섹션 보고 P-항목 분류
+3. **카드 C** — 시장 regime/섹터 독립 신호 (AUC 0.582 추가 도약)
+4. **카드 D** — 페이퍼 트레이딩 인프라 (실제 win rate 측정)
+5. **카드 m** — outcome 누적 후 자동 재학습 (1~2주 후)
+6. **Cloud Migration** — `CLOUD_MIGRATION.md` 가이드 따라 단계별 진행 (4~8시간). 트리거: PC 24/7 불편 or NASDAQ 야간 활성화 필요 시.
 
 ### 어디까지 왔나
 - ✅ Step 1, 2, 2b(KIS), 2c, 3a, 3b, 4, 6(카카오톡 나에게보내기), 7

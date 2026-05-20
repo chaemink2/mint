@@ -321,3 +321,58 @@ Claude Code는 Cursor Step 2 이후 **6~8주치 분량의 기능을 3일에 압�
 ---
 
 *본 문서는 Cursor가 작성. `CLAUDE.md` / `CURSOR.md` 미수정.*
+
+---
+
+# 📨 Cursor에게 — 3차 검토 요청 (2026-05-20 사용자 발신)
+
+## 배경 (Claude가 정리)
+
+2차 검토(5/19) 이후 다음 작업 완료:
+- **P1+P2+P3 반영** (commit `2a5e9f3`) — 학습-추론 정합 + 운영 안정 + 메시지 안전
+- **카드 E** (commit `412bbbd`) — 200종목 × 730일 재학습. AUC 0.551 → 0.582, 임계값 0.60 일평균 1.3개 · precision 0.79
+- **카드 a/b/c** (commit `863d6f8`) — 시장 지수 / 스캔 funnel / 미드데이 ping (운영 가시성)
+- **카드 d/e/f/g** (commit `2771542`) — 대시보드 통합 리프레시 (시장지수+funnel+outcome trend, P&L 게이지, 모델 분석 페이지+슬라이더, 모바일 UI)
+- **운영 첫날 (5/20)**: 약세장 (KOSPI -0.86%, KOSDAQ -2.61%) → 시그널 0건. 시스템 보수 회피 성공.
+
+운영 환경 답변 (Claude가 PowerShell로 확인):
+1. `MINT_USE_ML_CONFIDENCE=true` ✓
+2. `MINT_USE_MINUTE_RULE=true` ✓
+3. 작업 스케줄러: `Mint Signal Scan` 1개만 등록. `Mint 일일 요약`은 미등록 (사용자 잔여 작업).
+
+## 사용자 핵심 질문
+
+> "내일이 오늘처럼 엄청난 하락장이 아니라는 가정 하에, 좋은 시그널을 내가 받을 수 있는 상황인지에 대해서 검증해줘."
+
+## 부탁드릴 검토
+
+### A. 평상시 시그널 건전성 (핵심)
+1. **5/19c 모델 (AUC 0.582)** 의 임계값 0.60 + 분봉 ON 조합이 **평상시 (지수 -0.5% ~ +0.5%) 에 적절한 시그널 양** 을 만들 수 있는지?
+   - val 시뮬레이션 일평균 1.3개. 분봉 통과율 미검증 → 실제는 더 적을 가능성.
+   - 분봉 임계값 (`vol_spike >= 3.0`) 이 너무 빡빡해서 시그널이 거의 0인 운영이 될 수도?
+2. 분봉을 끄거나 (`MINT_USE_MINUTE_RULE=false`) 분봉 임계값을 낮추는 것 (`MINT_MIN_MINUTE_VOL_SPIKE=2.0`) 중 어느 쪽 권장?
+3. ML 임계값 0.60이 평상시 적정인지, 아니면 0.55까지 낮춰서 시그널 양 확보 vs precision 감수가 나은지?
+
+### B. 5/20 카드 a/b/c 코드 정합성
+1. `data/market_index.py` Naver 모바일 API — 휴일/장 후 동작?
+2. `notifier.maybe_send_midday_ping` 의 자동 사유 진단 로직(약세장/ML 미달/분봉 미달) 이 funnel stats 해석으로 합리적인지?
+3. `notifier.accumulate_scan_stats` race condition (여러 scan 동시) 위험?
+
+### C. 5/20 카드 d/e/f/g 대시보드
+1. `dashboard/app.py` 의 새 함수 (outcome_trend_df, signal_count_trend, model_confidence_distribution) SQL/pandas 정합성
+2. `🧠 모델 분석` 페이지 임계값 슬라이더가 사용자에게 의미 있는 작용을 하는지 (val set 기준이라 실 운영과 격차 있음)
+3. P&L 게이지의 stop/buy/target axis 범위 — 음수 가격 등 edge case
+
+### D. 다음 카드 우선순위 (사용자 결정 보조용)
+다음 후보:
+- **카드 m** — outcome 1~2주 누적 후 실 분포 재학습
+- **카드 C** — 시장 regime/섹터 피처 (현재 가장 큰 도약 카드)
+- **카드 D** — 페이퍼 트레이딩 인프라
+- **Cloud Migration** — `CLOUD_MIGRATION.md` 가이드 (PC OFF + NASDAQ 야간 운영)
+
+사용자 의향: 미래에 Cloud Migration 하고 싶음 (PC OFF + NASDAQ). 다만 지금은 1~2주 운영 후 결정.
+
+## 검토 결과 출력
+
+`mint/REVIEW_CURSOR.md` 끝에 `# 📨 Cursor 3차 검토 (2026-05-XX)` 섹션으로 append.
+승인된 사항만 Claude가 다음 라운드에 코드 반영.
