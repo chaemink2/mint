@@ -1,0 +1,43 @@
+name: Mint KR Scan
+
+# 평일 KST 09:00~15:50 (UTC 00:00~06:50), 10분 간격
+# GHA cron은 UTC 기준 + 지연 가능 (수 분 ~ 수십 분). 일봉 기반이라 영향 작음.
+on:
+  schedule:
+    - cron: '*/10 0-6 * * 1-5'
+  workflow_dispatch: {}
+
+concurrency:
+  group: mint-kr-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: 'mint/requirements.txt'
+
+      - name: Install deps
+        run: pip install -r mint/requirements.txt
+
+      - name: Scan KR
+        env:
+          DATABASE_URL:         ${{ secrets.DATABASE_URL }}
+          KAKAO_REST_API_KEY:   ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_REDIRECT_URI:   ${{ secrets.KAKAO_REDIRECT_URI }}
+          KIS_APP_KEY:          ${{ secrets.KIS_APP_KEY }}
+          KIS_APP_SECRET:       ${{ secrets.KIS_APP_SECRET }}
+          MINT_USE_ML_CONFIDENCE:    'true'
+          MINT_USE_MINUTE_RULE:      'true'
+          MINT_MIN_ML_CONFIDENCE:    '0.60'
+          MINT_MIN_MINUTE_VOL_SPIKE: '2.0'
+          MINT_WATCHLIST_SIZE:       '200'
+          MINT_MAX_RISK_SCORE:       '45'
+        run: python -X utf8 mint/main.py scan

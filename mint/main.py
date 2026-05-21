@@ -345,7 +345,7 @@ def main():
         "command",
         nargs="?",
         default="scan",
-        choices=["scan", "catch-up", "daemon", "backtest", "train", "daily-summary", "outcomes"],
+        choices=["scan", "scan-us", "catch-up", "daemon", "backtest", "train", "daily-summary", "outcomes"],
         help="scan (default): one-shot KR rule scan",
     )
     parser.add_argument("--markets", nargs="+", default=None,
@@ -363,6 +363,8 @@ def main():
 
     if args.command == "scan":
         cmd_scan()
+    elif args.command == "scan-us":
+        cmd_scan_us()
     elif args.command == "catch-up":
         cmd_catch_up()
     elif args.command == "daemon":

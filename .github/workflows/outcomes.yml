@@ -1,0 +1,33 @@
+name: Mint Outcomes (24h Evaluation)
+
+# 평일 KST 23:30 (UTC 14:30). 24h 경과 시그널의 outcome 평가 + DB 누적.
+# daily-summary와 별도로 한 번 더 — 늦은 시그널(15시 직전 발급)도 다음날 자정 전 평가되도록.
+on:
+  schedule:
+    - cron: '30 14 * * 1-5'
+  workflow_dispatch: {}
+
+concurrency:
+  group: mint-outcomes
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: 'mint/requirements.txt'
+
+      - name: Install deps
+        run: pip install -r mint/requirements.txt
+
+      - name: Evaluate Outcomes
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python -X utf8 mint/main.py outcomes

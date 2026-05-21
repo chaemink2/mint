@@ -43,6 +43,7 @@ logs/
 *.pt
 *.ckpt
 *.joblib
+!data/models/mint_lgbm.joblib  # GHA 추론용 — 모델 파일은 repo 포함 (Cloud Migration)
 data/models/training_data_*.csv
 data/backtest_*.csv
 models/checkpoints/
