@@ -1,0 +1,22 @@
+# Mint - GHA / Cloud 운영 전용 (가벼움)
+# scan / daily-summary / outcomes 명령에 필요한 최소 의존성만.
+# 학습/대시보드 의존성은 mint/requirements.txt 에 분리.
+
+# DB
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+
+# 데이터 fetch (KR + 종목명 + 일봉)
+pykrx>=1.0.47
+requests>=2.31.0
+yfinance>=0.2.38            # NASDAQ scan-us — KR scan에서도 us_client import 시 필요
+
+# 분석/ML 추론
+pandas>=2.0.0
+numpy>=1.26.0
+lightgbm>=4.3.0
+ta>=0.11.0                  # RSI/MACD/볼린저밴드 (engine/features.py)
+scikit-learn>=1.4.0         # isotonic calibration (engine/models/lgbm.py 추론)
+
+# 환경변수
+python-dotenv>=1.0.0
