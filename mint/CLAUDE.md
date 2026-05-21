@@ -1,65 +1,44 @@
 # Mint 프로젝트 — 핸드오프 / 결정 기록
 
-> **마지막 업데이트**: 2026-05-21 (5/21 운영 진단 3가지 픽스 + Cloud Migration Phase 1+2+4 코드 완료. 사용자 액션 5단계 대기.)
-> **다음 세션 픽업 시**: 아래 [🔁 다음 세션 픽업 가이드](#-다음-세션-픽업-가이드) 부터 읽으세요.
-> **Cursor 변경 이력**: `CURSOR.md` · **Cursor 검토 결과**: `REVIEW_CURSOR.md` · **Cloud 이전 가이드**: `CLOUD_MIGRATION.md` · **사용자 액션 가이드**: `CLOUD_MIGRATION_USER_GUIDE.md`
+> **마지막 업데이트**: 2026-05-22 (Cloud Migration 코드+배포 완료. 5/22~28 GHA 1주 자동 운영 검증 중.)
+> **다음 세션 픽업 시**: `mint/OPERATION_WEEK1.md` **최우선** + 아래 [🔁 다음 세션 픽업 가이드](#-다음-세션-픽업-가이드)
+> **Cursor 변경 이력**: `CURSOR.md` · **Cursor 검토 결과**: `REVIEW_CURSOR.md` · **Cloud 이전 가이드**: `CLOUD_MIGRATION.md` · **사용자 액션 가이드**: `CLOUD_MIGRATION_USER_GUIDE.md` · **1주 운영 플레이북**: `OPERATION_WEEK1.md`
 
 ---
 
-## 🔁 다음 세션 픽업 가이드 (2026-05-22 이후)
+## 🔁 다음 세션 픽업 가이드 (2026-05-29 이후, 1주 운영 결과 수렴 후)
 
 ### 한 줄 요약
-**5/21 운영 진단으로 3가지 진짜 이슈 픽스(`aaae6e7`): TZ 비교 버그, universe 정적 폴백 20종목→200, risk 게이트 30→45. Cloud Migration Phase 1(SQLAlchemy 추상화)+Phase 2(token/state DB화)+Phase 4(GHA workflows) 코드 완료(`b7afcc1`, `4fb61ec`). 사용자 액션 5단계는 `CLOUD_MIGRATION_USER_GUIDE.md` 참조.**
+**Cloud Migration 코드(`b7afcc1`, `4fb61ec`) + 배포(`649c4cd`) 완료. Neon Postgres + GHA cron 4개 + Streamlit Cloud 가동. 5/22~5/28 1주 검증 운영 진행 중. 결과/관찰/이슈는 `OPERATION_WEEK1.md` 참고. 다음 세션 첫 행동도 거기 명시.**
 
-### 첫 행동 (다음 세션 시작 시)
-```powershell
-# 1) Cloud Migration 진행 상태 확인 — 사용자가 Phase 3~6 어디까지 왔는지
-git log --oneline -10
-# 4fb61ec, b7afcc1, aaae6e7, 9ac4bef ...
+### 첫 행동
+**`mint/OPERATION_WEEK1.md` 끝의 「📌 다음 세션 픽업」 섹션 절차 그대로 실행.** 1주 운영 데이터 + 사용자 피드백 → 우선순위 결정 분기.
 
-# 2) GHA workflow 동작 여부
-#    GitHub Actions 탭 → scan-kr / daily-summary 로그
-#    실패면 Secret 누락/오타 가능성 — CLOUD_MIGRATION_USER_GUIDE.md Phase 4b 참고
+### 5/21~22 작업 요약 (현재 운영 상태)
 
-# 3) Neon DB 연결 확인 (사용자가 가입 완료 후)
-$env:DATABASE_URL = "postgresql://..."
-python -X utf8 -c "import sys; sys.path.insert(0,'mint'); from portfolio.db import get_outcome_stats; print(get_outcome_stats(days=7))"
+**5/21 진단 픽스 (`aaae6e7`)**:
+- TZ 비교 버그 픽스, Universe 정적 폴백 → default 200, Risk 게이트 30→45
+- Cursor 3차 검토 응답 본문(R0~R6 + 결론 H) commit
 
-# 4) 어제~오늘 시그널 + outcome 조회 (로컬 sqlite OR Neon)
-python -X utf8 mint\main.py outcomes
-```
+**5/21 Cloud Migration 코드 (`b7afcc1`, `4fb61ec`, `465731d`)**:
+- Phase 1: SQLAlchemy 추상화 (sqlite/postgres 양쪽 호환). DATABASE_URL env.
+- Phase 2: auth_tokens + app_state 테이블. 토큰/state 자동 DB 마이그레이션.
+- Phase 4: GHA workflow 4개 (scan-kr/scan-us/daily-summary/outcomes). 모델 파일 repo commit. `scan-us` CLI 명령 추가.
+- GHA용 requirements-runtime.txt 분리 (qlib/torch 제외)
 
-### 5/21까지 작업한 것 (현재 운영 상태)
+**5/22 배포 (`649c4cd`)**:
+- Streamlit Cloud용 mint/dashboard/requirements.txt 분리 (plotly ModuleNotFoundError fix)
+- 사용자 액션 8단계 중 1~6 완료 (KIS IP OFF, Neon, Secrets, 토큰 복사, GHA Daily Summary, Streamlit Cloud)
+- 대시보드 정상 가동: https://chaemink2-mint.streamlit.app
+- 5/22 첫 funnel: 평가 392 → 모멘텀 53 → 리스크 27 → 거래량 16 → 시그널 0 (universe 200 효과 확인)
 
-**진단 픽스 (`aaae6e7`)**:
-- TZ 비교 버그 — `_evaluate_single_outcome`에서 KST tz-aware vs naive datetime. 첫 daily-summary(5/21 15:35) LastTaskResult=1로 실패. → `config.tz.to_kst` 통일.
-- Universe 정적 폴백 — `MINT_WATCHLIST_SIZE` 미설정 → default None → 20종목 운영. 200종목 모델과 mismatch. → default 200 (env override 가능).
-- Risk 게이트 — `max_risk_score` 30→45. 실 데이터 모멘텀 통과 종목 risk 평균 41.4. 사용자 결정 사안 변경.
-- Cursor 3차 검토 응답 본문(R0~R6 + 결론 H)도 같이 commit.
-
-**Cloud Migration 코드 (`b7afcc1`, `4fb61ec`)**:
-- Phase 1: SQLAlchemy 추상화 — `text()` + named params + `RETURNING id` + dialect 분기. sqlite/postgres 양쪽 호환. DATABASE_URL env.
-- Phase 2: `auth_tokens` + `app_state` 테이블 신규. kakao/kis 토큰 + notifier state 파일 → DB 자동 마이그레이션 (1회). 로컬 sqlite 운영 시 파일 동시 보존.
-- Phase 4: GHA workflow 4개 (`scan-kr`/`scan-us`/`daily-summary`/`outcomes`). `mint_lgbm.joblib` repo commit. main.py에 `scan-us` 명령 추가.
-
-### 🚦 사용자 액션 잔여 (CLOUD_MIGRATION_USER_GUIDE.md 참조)
-
-| Phase | 액션 | 소요 |
-|---|---|---|
-| 3 | Neon DB 가입 + `DATABASE_URL` 받기 | 10분 |
-| 4b | GitHub Secrets 5개 등록 | 10분 |
-| 4c | 로컬 sqlite의 kakao 토큰을 Neon으로 1회 복사 | 5분 |
-| 4d | GHA `Mint Daily Summary` 1회 manual trigger → 카톡 도착 확인 | 5분 |
-| 5 | Streamlit Cloud 배포 + 폰 북마크 | 15분 |
-| 6 | Windows 작업 스케줄러 비활성 (1주 검증 후) | 5분 |
-| - | KIS 콘솔 IP 제한 OFF 확인 | 1분 |
-
-### 다음 카드 우선순위
-1. **GHA 운영 1주일 검증** — Actions 탭 로그 + 카톡 도착 패턴 + outcome 누적
-2. **카드 m — outcome 30건 이상 후 재학습** — GHA에 train workflow 추가 가능
-3. **카드 C** — KOSPI/KOSDAQ regime/섹터 (AUC 0.582 추가 도약)
-4. **카드 D** — 페이퍼 트레이딩 인프라 (실제 win rate 측정)
-5. **NASDAQ 야간** — `scan-us.yml` cron 주석 해제 시 활성화
+### 다음 카드 우선순위 (1주 운영 후 결정)
+1. **outcome 30건 이상 누적 시 → 카드 m (재학습)**
+2. **GHA 안정 확인 시 → Step 8 (Windows 작업 스케줄러 Disable)**
+3. **알려진 이슈 처리**: P1 시장 지수 표시 오류, P2 UTC vs KST dedup, P3 mint/requirements.txt qlib 청소 (상세는 OPERATION_WEEK1.md)
+4. **카드 C** — KOSPI/KOSDAQ regime/섹터 독립 신호
+5. **카드 D** — 페이퍼 트레이딩 인프라
+6. **NASDAQ 야간** — scan-us.yml cron 주석 해제
 
 ### 어디까지 왔나
 - ✅ Step 1, 2, 2b(KIS), 2c, 3a, 3b, 4, 6(카카오톡 나에게보내기), 7
