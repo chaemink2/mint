@@ -376,3 +376,270 @@ Claude Code는 Cursor Step 2 이후 **6~8주치 분량의 기능을 3일에 압�
 
 `mint/REVIEW_CURSOR.md` 끝에 `# 📨 Cursor 3차 검토 (2026-05-XX)` 섹션으로 append.
 승인된 사항만 Claude가 다음 라운드에 코드 반영.
+
+---
+
+# 📨 Cursor 3차 검토 (2026-05-21)
+
+> **검토 범위**: 5/20 세션 5 commits (`8d4554e`~`5efe692`) + 운영 funnel 실측 + `CLOUD_MIGRATION.md`  
+> **2차 대비**: P1(학습-추론 정합)·P2(`scan_us` 만료)·P3(`max_daily_buys`) **반영 확인됨**
+
+---
+
+## 0. 사용자 핵심 질문에 대한 답
+
+> **「내일이 평상시(지수 ±0.5%)라면 좋은 시그널을 받을 수 있는가?」**
+
+**예 — 받을 수 있는 구조입니다.** 다만 기대치를 **「하루 0~2건의 카카오 매수 알림」**으로 잡는 것이 맞고, **「매일 여러 건」**은 아닙니다.
+
+| 근거 | 내용 |
+|------|------|
+| 백테스트(val) | 5/19c 모델, 룰+ML **0.60** → **일평균 1.3건**, precision **0.79** (분봉 **미포함**) |
+| 5/20 실측 (약세) | KOSPI -0.86%, KOSDAQ -2.61% → funnel `passed_momentum=0` → 시그널 0 — **의도대로 회피** |
+| 5/21 실측 (상대적 평상) | 6회 scan, `passed_momentum=30` → `passed_ml=5` → `passed_minute=2` → **시그널 2건** (`.notifier_state.json`) |
+| 해석 | 평상시에도 **분봉 AND**가 최종 관문이라 val 1.3건의 **절반 이하**가 카톡까지 갈 수 있음 |
+
+**「좋은 시그널」의 정의를 나누면:**
+
+- **시스템 관점**: precision ~0.79(ML만) → 분봉 추가 시 더 보수적 → **나쁜 날 0건, 좋은 날 1~2건**은 건전함.
+- **체감 관점**: 주 2~5건이면 “자주 온다”고 느끼기 어려울 수 있음 → **미드데이 ping + funnel**이 그 공백을 메우는 설계(5/20 카드 c)로 타당.
+
+---
+
+## A. 평상시 시그널 건전성 (상세)
+
+### A-1. ML 0.60 + 분봉 ON — 일평균 ~1개 가능한가?
+
+| 등급 | 판정 |
+|------|------|
+| 🟢 | **가능** (0~2건/일). 5/21 funnel이 실증적 전처리 |
+| 🟡 | val **1.3건/일**은 분봉 없는 시뮬 — 실운영은 **더 적음** |
+
+**파이프라인 대략적 통과율 (5/21 하루, 200종×6 scan 누적):**
+
+```
+평가 1200 → 모멘텀 30 (2.5%) → … → ML 5 (0.42% of evaluated) → 분봉 2 (0.17%) → 시그널 2
+```
+
+- 스캔마다 **같은 종목 재평가**이므로 %는 낮게 보임. 중요한 것은 **하루 끝 `signals_created=2`**.
+- 평상시(지수 ±0.5%)면 `passed_momentum` 비율이 5/20(0%)보다 **5/21(2.5%/scan 누적) 이상**으로 오를 가능성 큼.
+- **보수적 운영 추정**: 평상시 **주 3~8건**, 약세일 **0~1건**.
+
+### A-2. `vol_spike >= 3.0` 너무 빡빡한가?
+
+| 등급 | 판정 |
+|------|------|
+| 🟡 | **빡빡함**. 5/21에서 ML 5건 중 분봉 **2건만** 통과 (통과율 ~40%) |
+
+**권장 (코드 변경 없이 env만):**
+
+| 옵션 | 장점 | 단점 |
+|------|------|------|
+| **① `MINT_MIN_MINUTE_VOL_SPIKE=2.0` (권장 1순위)** | 시그널 수 ↑, 5/21 데이터로 점진 조정 가능 | precision 소폭 하락 가능 |
+| ② 분봉 OFF | val 기준 ~1.3건/일에 근접 | 장중 “이미 오른 뒤” 진입 ↑, 5/20 약세에도 모멘텀 통과 종목은 알림 가능 |
+| ③ 분봉 ON 유지 + 3.0 | precision 최대 | **평상시에도 0~1건/일**에 그칠 위험 |
+
+**Cursor 의견:** **분봉을 끄지 말 것.** 대신 **`vol_spike=2.0`으로 1~2주 운영** 후 funnel의 `passed_ml` vs `passed_minute` 비율을 보고 2.5/3.0 재조정.  
+장 초반(09:00~10:00)은 `minute_long_window=20` 미충족으로 **구조적으로 0건** — 스케줄러가 08:30 시작이면 첫 1~2회 scan은 분봉 통과 거의 없음(정상).
+
+### A-3. ML 0.60 vs 0.55
+
+| 등급 | 판정 |
+|------|------|
+| 🟢 | **0.60 유지** |
+
+`CLAUDE.md` 5/19c 표: **0.55~0.74 구간 precision·일평균 동일(plateau)**. 0.55로 내려도 **시그널 수 이득 없음**, precision만 0.686으로 하락.
+
+**0.55는 비추천.** 시그널 수를 늘리려면 ML보다 **분봉 완화(2.0)** 또는 **Top-N/일 1건** 정책이 낫다.
+
+---
+
+## B. 카드 a/b/c 정합성 (5/20 `863d6f8`)
+
+### B-1. `data/market_index.py`
+
+| 등급 | 판정 |
+|------|------|
+| 🟢 | 구현 적절 |
+| 🟡 | 휴일·장후·API 변경 |
+
+**🟢**
+- Naver 모바일 JSON, 60초 캐시, `marketStatus` 보존 — heartbeat/미드데이/일일요약에 적합.
+- 5/20 약세 수치(-0.86%, -2.61%)와 funnel `passed_momentum=0` **정합**.
+
+**🟡**
+- **휴일/장전**: API 실패 시 `None` → 메시지에서 지수 줄 생략 (크래시 없음). “시스템 죽음”과 혼동 가능 → 캡션 “지수 조회 실패” 한 줄 권장(승인 시).
+- **장 마감 후**: `CLOSE`여도 종가·등락률은 유효 — 문제 없음.
+- **Naver 스키마 변경** 시 silent fail — universe와 동일 리스크.
+
+### B-2. `maybe_send_midday_ping` 자동 진단
+
+| 등급 | 판정 |
+|------|------|
+| 🟢 | funnel 기반 진단 **합리** |
+
+분기 순서 (`notifier/__init__.py:248-255`):
+
+1. `passed_momentum==0` → 약세/모멘텀 부족  
+2. else `passed_ml==0` & `passed_volume>0` → ML 미달  
+3. else `passed_minute==0` & `passed_ml>0` → 분봉 미달  
+
+5/20 데이터와 **일치** (모멘텀 0이면 2·3번 미실행). 5/21에서는 분봉 병목 메시지가 나올 조건 충족 가능.
+
+**🟡 한계:** `passed_volume`은 모멘텀 통과 후 카운트 — 메시지 “룰은 통과”는 엄밀히 **모멘텀+리스크+거래량**까지 통과한 뒤 ML 실패를 의미. 사용자 혼동 가능하나 **방향은 맞음**.
+
+### B-3. `accumulate_scan_stats` race
+
+| 등급 | 판정 |
+|------|------|
+| 🟡 | 이론상 race, 실운영에서는 낮음 |
+
+read-modify-write without file lock. Windows 스케줄러 **「새 인스턴스 시작 안 함」**이면 대부분 직렬.  
+겹침 시 funnel 숫자 **소폭 누락** 가능 — 치명적 아님.
+
+**승인 시 수정안:** `fcntl`/`portalocker` 또는 scan 종료 시 **단일 writer** 보장.
+
+---
+
+## C. 카드 d/e/f/g 대시보드 (`2771542`)
+
+### C-1. SQL / pandas 정합성
+
+| 등급 | 판정 |
+|------|------|
+| 🟢 | SQLite에서 동작 |
+| 🟡 | Cloud(Postgres) 이전 시 수정 필요 |
+
+**🟢**
+- `_outcome_trend_df`, `_signal_count_trend`: `DATE(created_at)` — **SQLite OK**.
+- `_scan_funnel_today`: notifier state 읽기 — DB와 분리, 정합.
+
+**🟡**
+- `CLOUD_MIGRATION.md` Phase 1 시 `DATE()` → `DATE_TRUNC('day', ...)` 등 **dialect 분기** 필요 (가이드에 이미 언급됨).
+- outcome이 아직 적으면 차트 **빈 화면** — 1~2주 후 의미 생김.
+
+### C-2. 모델 분석 슬라이더
+
+| 등급 | 판정 |
+|------|------|
+| 🟢 | 교육·튜닝용으로 **의미 있음** |
+| 🟡 | 실운영과 격차 명시 필요 |
+
+- validation set + **최신 training CSV** 기준 — 5/19c 수치와 **일치** (0.60 plateau 재현 가능).
+- **분봉·dedup·장중 stale** 미반영 → “슬라이더에서 10건 나온다” ≠ “오늘 카톡 10건”.
+- UI에 이미 caption 있음 — **“validation 기준, 분봉 미포함”** 한 줄 추가 권장(승인 시).
+
+### C-3. P&L 게이지 edge case
+
+| 등급 | 판정 |
+|------|------|
+| 🟡 | 일반 케이스 OK, edge 있음 |
+
+```python
+"axis": {"range": [stop * 0.99, target * 1.01] if target and stop else None},
+```
+
+- `target <= stop` (데이터 오류) → gauge 깨짐.
+- `buy_price <= 0` → metric/format 오류.
+- `stop`/`target` None → `range: None` — Plotly가 자동 스케일 (허용).
+
+**승인 시 수정안:** `if target and stop and target > stop > 0` 일 때만 steps/range 설정.
+
+---
+
+## D. 다음 카드 우선순위 (ROI)
+
+사용자 의향: Cloud는 **1~2주 운영 데이터 후**. 당장 **일일 요약 스케줄러 등록** 잔여.
+
+| 순위 | 카드 | ROI | 이유 |
+|------|------|-----|------|
+| **0 (즉시)** | **일일 요약 스케줄러** | ★★★★★ | outcome 평가·누적 win rate·funnel 마감이 **안 돌고 있음**. 코드 완성, 트리거만缺失 |
+| **1** | **카드 m** (outcome 1~2주 후 재학습) | ★★★★☆ | 일일 요약 없으면 outcome DB가 안 쌓임 → **m은 요약 이후** |
+| **2** | **분봉 vol_spike 2.0 실험** (env) | ★★★★☆ | 코드 0줄, 평상시 시그널 수 튜닝 — 사용자 질문 직결 |
+| **3** | **카드 D** (페이퍼) | ★★★★☆ | 실체결 없이 **가상 승률 vs ML 0.79** 검증 |
+| **4** | **카드 C** (regime/섹터) | ★★★☆☆ | AUC 구조적 상승 — 작업량 큼, 2~4주 후 |
+| **5** | **Cloud Migration** | ★★★☆☆ | PC OFF + NASDAQ — **아래 Cloud 절** |
+| **6** | **카드 F** (피처 정리) | ★☆☆☆☆ | 유지보수 |
+
+**2차 검토 P4(카톡 shorten)·P5(outcome 당일봉)·P6(validate_filters)** — 여전히 유효하나 **일일 요약·분봉 튜닝보다 후순위**.
+
+---
+
+## E. Cloud Migration (`CLOUD_MIGRATION.md`) 의견
+
+| 등급 | 판정 |
+|------|------|
+| 🟢 | 가이드 방향 **타당** |
+| 🟡 | 트리거·순서 조정 권장 |
+
+### 트리거 시점 (Cursor 의견)
+
+**지금 당장 Full Migration 하지 말 것.** 아래 **모두** 충족 후:
+
+1. ✅ ML 0.60 + 분봉 운영 **1~2주** (funnel·outcome 축적)  
+2. ⏳ **`Mint 일일 요약` 스케줄러 등록** (사용자 잔여 5분)  
+3. ⏳ outcome **WIN/LOSS 30건 이상** 또는 2주 경과  
+4. ⏳ (선택) 페이퍼 또는 수동 체결 **10건 이상** — 실전 체감 검증  
+
+**PC OFF + NASDAQ**이 목표면: **Phase 4(GHA cron) + US workflow**만 먼저 해도 됨. DB는 당분간 **SQLite를 Actions artifact로 넘기는 해킹**보다, 가이드대로 **Postgres 전환 후**가 깔끔.
+
+### 스택·단계 의견
+
+| 항목 | 의견 |
+|------|------|
+| GitHub Actions cron | KR 일봉 스캔에 **적합** (5~15분 지연 허용). `workflow_dispatch` 병행 권장 |
+| Supabase vs Neon | **Neon** — 무료 3GB·branching. Supabase도 OK |
+| SQLAlchemy 추상화 | **필수** — `dashboard`의 `DATE()` 포함 dialect 분기 |
+| 토큰 DB화 | GHA에서 **필수** — 가이드 Phase 2 정확 |
+| `mint_lgbm.joblib` git commit | **권장** — Actions에서 모델 누락 방지 (가이드와 동일) |
+| Streamlit Cloud | 대시보드만 cloud, **scan은 GHA** — 분리 타당 |
+| KIS IP 제한 | **OFF 필수** — 가이드 경고 적절 |
+| UTC vs KST | 🔴 마이그레이션 시 **가장 흔한 버그** — `ZoneInfo("Asia/Seoul")` 일원화 선행 권장 |
+
+### NASDAQ 야간
+
+- `scan-us` + `MINT_US_SCAN` — 코드 준비됨 (`cmd_scan_us`에 `_process_expiries` 포함 확인).
+- Cloud 후 **별도 workflow** `scan-us.yml` (UTC 13:30~20:00) — KR과 **cron 분리**가 디버깅에 유리.
+- yfinance 지연 — “실시간” 기대 낮추기 (문서화됨).
+
+---
+
+## F. 2차 검토 대비 개선·잔여
+
+| 2차 항목 | 5/20 상태 |
+|----------|-----------|
+| P1 학습-추론 정합 | ✅ `training.py` 룰 필터 적용 확인 |
+| P2 `scan_us` 만료 | ✅ `main.py:110` |
+| P3 `max_daily_buys` | ✅ `rule_scanner.py:207-219` |
+| P4 카톡 200자 | 🟡 freshness+분봉 시 여전히 위험 |
+| P5 outcome 당일봉 | 🟡 미수정 |
+| train/inference 분봉 gap | 🟡 문서화됨, 코드상 분봉은 추론만 |
+
+---
+
+## G. 승인 요청 목록 (3차 — Claude 다음 라운드)
+
+| # | 항목 | 기대 효과 |
+|---|------|-----------|
+| R0 | 사용자: **일일 요약 스케줄러 등록** (코드 아님) | outcome·win rate 파이프라인 가동 |
+| R1 | env 실험: `MINT_MIN_MINUTE_VOL_SPIKE=2.0` (1~2주) | 평상시 시그널 0~1 → 1~3 |
+| R2 | 대시보드 모델 페이지 caption: “val 기준, 분봉 미포함” | 기대치 관리 |
+| R3 | P&L gauge `target > stop` 가드 | edge crash 방지 |
+| R4 | `accumulate_scan_stats` file lock | funnel 정확도 |
+| R5 | `scripts/validate_filters.py` (5/19c 재현 + 분봉 시뮬 placeholder) | 수치 감사 가능 |
+| R6 | Cloud: **TZ 유틸 + DATE() dialect** 선행 (Migration Phase 0) | 이전 시 버그 예방 |
+
+**비추천 (이번 라운드):** ML 0.55, 분봉 OFF, target/stop 대칭(G), Full Cloud 즉시 실행.
+
+---
+
+## H. 결론 (사용자에게)
+
+1. **평상시에는 시그널을 받을 수 있다** — 다만 **하루 0~2건**이 정상이며, 5/20 같은 약세일 0건도 **설계대로**다.  
+2. **0.60 + 분봉 ON** 조합은 유지하되, **`vol_spike` 2.0**으로 완화 실험을 권장한다. 분봉 OFF는 precision 대신 “늦은 진입” 리스크가 커진다.  
+3. **지금 가장 급한 것은 코드가 아니라 `daily-summary` 스케줄러** — 없으면 outcome·win rate·카드 m이 모두 지연된다.  
+4. **Cloud**는 가이드 품질 좋음 — **1~2주 로컬 운영 + 일일 요약 가동 후** Postgres+GHA로 옮기는 순서가 맞다.
+
+---
+
+*본 섹션은 Cursor 3차 검토. `CLAUDE.md` / `CURSOR.md` 미수정.*

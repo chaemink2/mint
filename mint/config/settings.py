@@ -75,7 +75,9 @@ class SignalConfig:
     min_expected_return_1d: float = float(os.getenv("MINT_MIN_EXPECTED_RETURN", "0.03"))
     min_model_confidence: float = float(os.getenv("MINT_MIN_ML_CONFIDENCE", "0.70"))
     use_ml_confidence: bool = os.getenv("MINT_USE_ML_CONFIDENCE", "false").lower() == "true"
-    max_risk_score: float = float(os.getenv("MINT_MAX_RISK_SCORE", "30"))
+    # 30 → 45: 5/21 실 데이터 진단 결과 모멘텀 통과 종목 risk 평균 41.4. 30은 모두 차단.
+    # 사용자 결정 사안 변경(5/21): universe 200 정상화와 묶어 시그널 회복.
+    max_risk_score: float = float(os.getenv("MINT_MAX_RISK_SCORE", "45"))
     min_volume_ratio: float = float(os.getenv("MINT_MIN_VOLUME_RATIO", "1.2"))
 
     target_return: float = float(os.getenv("MINT_TARGET_RETURN", "0.035"))
@@ -111,8 +113,10 @@ class OperationConfig:
     signal_dedup_hours: int = int(os.getenv("MINT_SIGNAL_DEDUP_H", "4"))
     ref_price_stale_pct: float = float(os.getenv("MINT_REF_STALE_PCT", "0.008"))
     stop_loss_is_advisory: bool = True
-    # None이면 static 워치리스트(10개씩). 정수 지정 시 시총 상위 N개 동적 추출 (KR만).
-    watchlist_size: Optional[int] = field(default_factory=lambda: _optional_int("MINT_WATCHLIST_SIZE"))
+    # 기본 200 (KOSPI/KOSDAQ 시총 상위 각 200, Naver 폴백). env로 override 가능.
+    # 5/21 진단: 이전 default None은 정적 폴백 20종목으로 운영 → 200종목 모델과 분포 mismatch.
+    # 정적 폴백을 원하면 MINT_WATCHLIST_SIZE=0.
+    watchlist_size: Optional[int] = field(default_factory=lambda: _optional_int("MINT_WATCHLIST_SIZE") or 200)
 
 
 @dataclass

@@ -328,14 +328,17 @@ def _evaluate_single_outcome(sig: dict) -> Optional[dict]:
     from datetime import datetime as _dt
     from datetime import timedelta as _td
     from config.settings import config as _cfg
+    from config.tz import to_kst, now_kst
     from data import krx_client as _krx
 
     try:
         created = _dt.fromisoformat(sig["created_at"])
     except Exception:
         return None
+    # created_at은 tz-naive(과거 호환) 또는 tz-aware. 둘 다 KST로 통일 — bars["ts_local"]이 KST tz-aware이므로 비교 정합.
+    created = to_kst(created)
     horizon_h = _cfg.signal.max_hold_hours
-    if _dt.now() < created + _td(hours=horizon_h):
+    if now_kst() < created + _td(hours=horizon_h):
         return None
 
     target = sig.get("target_price")
