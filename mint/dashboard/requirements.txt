@@ -1,0 +1,24 @@
+# Mint - Streamlit Cloud dashboard 전용 (가벼움)
+# Streamlit Cloud는 main file (mint/dashboard/app.py) 옆 requirements.txt 우선 사용.
+# 학습 의존성(qlib, torch)은 제외 — 대시보드에서 미사용.
+
+# UI
+streamlit>=1.32.0
+plotly>=5.20.0
+
+# DB / 환경변수
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+python-dotenv>=1.0.0
+
+# 데이터 (시장 지수, KRX 일봉, NASDAQ)
+requests>=2.31.0
+pykrx>=1.0.47
+yfinance>=0.2.38
+
+# 분석/추론 (모델 분석 페이지에서 booster 로드, features 계산)
+pandas>=2.0.0
+numpy>=1.26.0
+lightgbm>=4.3.0
+ta>=0.11.0
+scikit-learn>=1.4.0
