@@ -21,7 +21,9 @@ streamlit>=1.32.0           # 대시보드 UI
 plotly>=5.20.0              # 차트
 
 # ── DB ─────────────────────────────────
-# SQLite (Python 표준 라이브러리 — 별도 설치 불필요)
+# SQLite (Python 표준 라이브러리 — 로컬 운영). DATABASE_URL=postgres://... 시 SQLAlchemy 통해 Postgres.
+sqlalchemy>=2.0             # DB 추상화 (sqlite ↔ postgres)
+psycopg2-binary>=2.9        # Postgres 드라이버 (Cloud Migration 후 활성)
 
 # ── 알림 ────────────────────────────────
 # 카카오 알림톡: requests 사용 (별도 SDK 없음)

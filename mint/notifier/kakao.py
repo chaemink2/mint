@@ -83,26 +83,69 @@ def _token_path() -> str:
 
 
 def _load_tokens() -> Optional[KakaoTokenSet]:
+    """1순위 DB, 2순위 파일(legacy — 발견 시 DB로 자동 마이그레이션)."""
+    try:
+        from portfolio.db import get_auth_token
+        row = get_auth_token("kakao")
+    except Exception as e:
+        log.debug("DB token lookup failed (%s) — fallback to file", e)
+        row = None
+    if row and row.get("access_token") and row.get("refresh_token") and row.get("expires_at"):
+        try:
+            return KakaoTokenSet.from_dict(row)
+        except Exception as e:
+            log.warning("Kakao token (DB) parse failed: %s", e)
+
     path = _token_path()
     if not os.path.exists(path):
         return None
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return KakaoTokenSet.from_dict(data)
+        tokens = KakaoTokenSet.from_dict(data)
+        # 1회 마이그레이션: 파일 → DB
+        try:
+            _save_tokens(tokens)
+            log.info("Kakao token migrated from file to DB")
+        except Exception as e:
+            log.debug("Kakao token migration to DB skipped: %s", e)
+        return tokens
     except Exception as e:
         log.warning("Kakao token load failed (%s): %s", path, e)
         return None
 
 
 def _save_tokens(tokens: KakaoTokenSet) -> None:
+    """DB 우선 저장. 로컬 호환 위해 파일도 함께 갱신 (sqlite 경로일 때만)."""
+    try:
+        from portfolio.db import save_auth_token, DATABASE_URL as _DB_URL
+        save_auth_token(
+            "kakao",
+            access_token=tokens.access_token,
+            refresh_token=tokens.refresh_token,
+            expires_at=tokens.expires_at.isoformat(),
+            refresh_expires_at=(
+                tokens.refresh_expires_at.isoformat()
+                if tokens.refresh_expires_at else None
+            ),
+        )
+    except Exception as e:
+        log.warning("Kakao token DB save failed: %s", e)
+
+    # 로컬 sqlite 운영일 때만 파일 보존 (GHA postgres 환경에선 파일 안 만듦)
+    try:
+        from portfolio.db import DATABASE_URL as _DB_URL
+        if not _DB_URL.startswith("sqlite"):
+            return
+    except Exception:
+        pass
     path = _token_path()
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(tokens.to_dict(), f, ensure_ascii=False, indent=2)
     except Exception as e:
-        log.warning("Kakao token save failed: %s", e)
+        log.warning("Kakao token file save failed: %s", e)
 
 
 def _now() -> datetime:

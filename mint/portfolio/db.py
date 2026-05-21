@@ -1,21 +1,61 @@
 """
-Mint - 포트폴리오 DB (SQLite)
-매매 이력, 보유 종목, 시그널 추적 (signals ↔ positions ↔ trades)
+Mint - 포트폴리오 DB
+SQLAlchemy 기반. DATABASE_URL env로 sqlite:///mint.db 기본, postgresql:// 등 지원.
+매매 이력, 보유 종목, 시그널 추적 (signals ↔ positions ↔ trades).
+Cloud Migration (2026-05-21): SQLite ↔ Postgres 양쪽 호환.
 """
-import sqlite3
+import os
+import logging
 from datetime import datetime, timedelta
 from contextlib import contextmanager
-from typing import Optional, List, Dict
-import os
+from typing import Optional, List, Dict, Iterable
+
+import pandas as pd
+from sqlalchemy import create_engine, text, bindparam, event
+from sqlalchemy.engine import Engine
 
 from config.settings import config
 
+log = logging.getLogger("mint.db")
 
 DB_PATH = os.environ.get("MINT_DB_PATH", config.db.path)
+DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
 
-_SCHEMA_V2 = """
-        CREATE TABLE IF NOT EXISTS signals (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+_engine: Optional[Engine] = None
+
+
+def _get_engine() -> Engine:
+    global _engine
+    if _engine is None:
+        connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+        _engine = create_engine(DATABASE_URL, future=True, connect_args=connect_args)
+        # SQLite FK 활성화 (postgres는 기본 ON)
+        if _engine.dialect.name == "sqlite":
+            @event.listens_for(_engine, "connect")
+            def _fk_on(dbapi_conn, _):
+                try:
+                    dbapi_conn.execute("PRAGMA foreign_keys=ON")
+                except Exception:
+                    pass
+    return _engine
+
+
+def _is_sqlite() -> bool:
+    return _get_engine().dialect.name == "sqlite"
+
+
+# ── 스키마 ────────────────────────────────────────────────
+
+def _pk() -> str:
+    """dialect별 PRIMARY KEY 정의 (auto-increment 포함)."""
+    return "INTEGER PRIMARY KEY AUTOINCREMENT" if _is_sqlite() else "BIGSERIAL PRIMARY KEY"
+
+
+def _schema_statements() -> List[str]:
+    pk = _pk()
+    return [
+        f"""CREATE TABLE IF NOT EXISTS signals (
+            id              {pk},
             ticker          TEXT NOT NULL,
             market          TEXT NOT NULL,
             name            TEXT,
@@ -32,10 +72,9 @@ _SCHEMA_V2 = """
             created_at      TEXT NOT NULL,
             notified        INTEGER DEFAULT 0,
             notified_at     TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS positions (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS positions (
+            id              {pk},
             signal_id       INTEGER REFERENCES signals(id),
             ticker          TEXT NOT NULL,
             market          TEXT NOT NULL,
@@ -51,10 +90,9 @@ _SCHEMA_V2 = """
             fx_rate_at_buy  REAL,
             source          TEXT DEFAULT 'manual',
             status          TEXT DEFAULT 'open'
-        );
-
-        CREATE TABLE IF NOT EXISTS trades (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS trades (
+            id              {pk},
             position_id     INTEGER REFERENCES positions(id),
             signal_id       INTEGER REFERENCES signals(id),
             ticker          TEXT NOT NULL,
@@ -73,19 +111,32 @@ _SCHEMA_V2 = """
             exit_reason     TEXT,
             source          TEXT DEFAULT 'manual',
             created_at      TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS daily_summary (
+        )""",
+        """CREATE TABLE IF NOT EXISTS daily_summary (
             date            TEXT PRIMARY KEY,
             total_trades    INTEGER DEFAULT 0,
             winning_trades  INTEGER DEFAULT 0,
             total_profit    REAL DEFAULT 0,
             win_rate        REAL DEFAULT 0,
             avg_hold_hours  REAL DEFAULT 0
-        );
-        """
+        )""",
+        # Cloud Migration Phase 2 — 토큰/상태 영속화 (GHA 휘발 컨테이너 대응)
+        """CREATE TABLE IF NOT EXISTS auth_tokens (
+            service             TEXT PRIMARY KEY,
+            access_token        TEXT,
+            refresh_token       TEXT,
+            expires_at          TEXT,
+            refresh_expires_at  TEXT,
+            updated_at          TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS app_state (
+            key         TEXT PRIMARY KEY,
+            value       TEXT,
+            updated_at  TEXT
+        )""",
+    ]
 
-# Legacy v1 columns → v2 via migrate_db()
+
 _MIGRATIONS = [
     ("signals", "name", "TEXT"),
     ("signals", "ref_price", "REAL"),
@@ -115,51 +166,81 @@ _MIGRATIONS = [
 ]
 
 
-def init_db(db_path: str = DB_PATH) -> None:
-    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-    with get_conn(db_path) as conn:
-        conn.executescript(_SCHEMA_V2)
+def init_db(db_path: Optional[str] = None) -> None:
+    # db_path는 sqlite 경로 호환용. SQLAlchemy URL은 모듈 import 시점에 고정.
+    if db_path and DATABASE_URL.startswith("sqlite"):
+        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+    engine = _get_engine()
+    with engine.begin() as conn:
+        for stmt in _schema_statements():
+            conn.exec_driver_sql(stmt)
+    with get_conn() as conn:
         _backfill_remaining_qty(conn)
 
 
-def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return any(r[1] == column for r in rows)
+def _existing_columns(conn, table: str) -> set:
+    if _is_sqlite():
+        rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+        return {r[1] for r in rows}
+    # postgres
+    rows = conn.execute(
+        text("""SELECT column_name FROM information_schema.columns
+                WHERE table_name=:t"""),
+        {"t": table},
+    ).fetchall()
+    return {r[0] for r in rows}
 
 
-def _backfill_remaining_qty(conn: sqlite3.Connection) -> None:
-    if not _column_exists(conn, "positions", "remaining_qty"):
+def _backfill_remaining_qty(conn) -> None:
+    cols = _existing_columns(conn, "positions")
+    if "remaining_qty" not in cols:
         return
     conn.execute(
-        """UPDATE positions SET remaining_qty = quantity
-           WHERE remaining_qty IS NULL AND status = 'open'"""
+        text("""UPDATE positions SET remaining_qty = quantity
+                WHERE remaining_qty IS NULL AND status = 'open'""")
     )
 
 
-def migrate_db(db_path: str = DB_PATH) -> None:
+def migrate_db(db_path: Optional[str] = None) -> None:
     init_db(db_path)
-    with get_conn(db_path) as conn:
+    engine = _get_engine()
+    with engine.begin() as conn:
         for table, col, typedef in _MIGRATIONS:
-            if not _column_exists(conn, table, col):
-                try:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
-                except sqlite3.OperationalError:
-                    pass
+            cols = _existing_columns(conn, table)
+            if col in cols:
+                continue
+            try:
+                conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
+            except Exception as e:
+                log.debug("ALTER TABLE %s ADD %s skipped: %s", table, col, e)
+    with get_conn() as conn:
         _backfill_remaining_qty(conn)
 
 
 @contextmanager
-def get_conn(db_path: str = DB_PATH):
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+def get_conn(db_path: Optional[str] = None):
+    """SQLAlchemy connection with auto-commit/rollback.
+    yield 받은 conn은 .execute(text(sql), {params}) 호출. fetchall/fetchone/scalar 가능.
+    """
+    engine = _get_engine()
+    conn = engine.connect()
+    trans = conn.begin()
     try:
         yield conn
-        conn.commit()
+        trans.commit()
     except Exception:
-        conn.rollback()
+        trans.rollback()
         raise
     finally:
         conn.close()
+
+
+def _rows_to_dicts(rows) -> List[Dict]:
+    return [dict(r._mapping) for r in rows]
+
+
+def _row_to_dict(row) -> Optional[Dict]:
+    return dict(row._mapping) if row is not None else None
 
 
 # ── 시그널 ────────────────────────────────────────────────
@@ -179,59 +260,65 @@ def log_signal(
     stop_price: Optional[float] = None,
 ) -> int:
     with get_conn() as conn:
-        cur = conn.execute(
-            """INSERT INTO signals
+        result = conn.execute(
+            text("""INSERT INTO signals
                (ticker, market, name, signal_type, confidence, expected_return,
                 risk_score, model_score, ref_price, target_price, stop_price,
                 status, valid_until, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                ticker,
-                market,
-                name,
-                signal_type,
-                confidence,
-                expected_return,
-                risk_score,
-                model_score,
-                ref_price,
-                target_price,
-                stop_price,
-                "active",
-                valid_until,
-                datetime.now().isoformat(),
-            ),
+               VALUES (:ticker, :market, :name, :signal_type, :confidence, :expected_return,
+                       :risk_score, :model_score, :ref_price, :target_price, :stop_price,
+                       :status, :valid_until, :created_at)
+               RETURNING id"""),
+            {
+                "ticker": ticker,
+                "market": market,
+                "name": name,
+                "signal_type": signal_type,
+                "confidence": confidence,
+                "expected_return": expected_return,
+                "risk_score": risk_score,
+                "model_score": model_score,
+                "ref_price": ref_price,
+                "target_price": target_price,
+                "stop_price": stop_price,
+                "status": "active",
+                "valid_until": valid_until,
+                "created_at": datetime.now().isoformat(),
+            },
         )
-        return cur.lastrowid
+        return int(result.scalar_one())
 
 
 def get_active_signals(limit: int = 50) -> List[Dict]:
     now = datetime.now().isoformat()
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT * FROM signals
+            text("""SELECT * FROM signals
                WHERE status = 'active' AND signal_type = 'BUY'
-                 AND (valid_until IS NULL OR valid_until > ?)
-               ORDER BY created_at DESC LIMIT ?""",
-            (now, limit),
+                 AND (valid_until IS NULL OR valid_until > :now)
+               ORDER BY created_at DESC LIMIT :lim"""),
+            {"now": now, "lim": limit},
         ).fetchall()
-        return [dict(r) for r in rows]
+        return _rows_to_dicts(rows)
 
 
 def get_signal(signal_id: int) -> Optional[Dict]:
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM signals WHERE id=?", (signal_id,)).fetchone()
-        return dict(row) if row else None
+        row = conn.execute(
+            text("SELECT * FROM signals WHERE id = :id"),
+            {"id": signal_id},
+        ).fetchone()
+        return _row_to_dict(row)
 
 
 def has_recent_signal(ticker: str, signal_type: str, hours: int = 4) -> bool:
     since = (datetime.now() - timedelta(hours=hours)).isoformat()
     with get_conn() as conn:
         row = conn.execute(
-            """SELECT 1 FROM signals
-               WHERE ticker=? AND signal_type=? AND created_at >= ?
-               LIMIT 1""",
-            (ticker, signal_type, since),
+            text("""SELECT 1 FROM signals
+               WHERE ticker = :t AND signal_type = :st AND created_at >= :since
+               LIMIT 1"""),
+            {"t": ticker, "st": signal_type, "since": since},
         ).fetchone()
         return row is not None
 
@@ -240,15 +327,15 @@ def expire_stale_signals() -> int:
     """시간 만료된 active 시그널을 expired로. 만료 사유는 'TIME'."""
     now = datetime.now().isoformat()
     with get_conn() as conn:
-        cur = conn.execute(
-            """UPDATE signals
-               SET status='expired',
-                   expiry_reason=COALESCE(expiry_reason,'TIME')
-               WHERE status='active'
-                 AND valid_until IS NOT NULL AND valid_until < ?""",
-            (now,),
+        result = conn.execute(
+            text("""UPDATE signals
+               SET status = 'expired',
+                   expiry_reason = COALESCE(expiry_reason, 'TIME')
+               WHERE status = 'active'
+                 AND valid_until IS NOT NULL AND valid_until < :now"""),
+            {"now": now},
         )
-        return cur.rowcount
+        return int(result.rowcount or 0)
 
 
 def check_price_expiry() -> List[Dict]:
@@ -258,15 +345,15 @@ def check_price_expiry() -> List[Dict]:
     """
     from data import kis_client  # 순환 방지 위해 함수 내 import
 
-    newly = []
+    newly: List[Dict] = []
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT * FROM signals
-               WHERE status='active' AND signal_type='BUY'
+            text("""SELECT * FROM signals
+               WHERE status = 'active' AND signal_type = 'BUY'
                  AND market IN ('KOSPI','KOSDAQ')
-                 AND target_price IS NOT NULL AND stop_price IS NOT NULL"""
+                 AND target_price IS NOT NULL AND stop_price IS NOT NULL""")
         ).fetchall()
-        active = [dict(r) for r in rows]
+        active = _rows_to_dicts(rows)
 
     for sig in active:
         try:
@@ -286,10 +373,10 @@ def check_price_expiry() -> List[Dict]:
 
         with get_conn() as conn:
             conn.execute(
-                """UPDATE signals
-                   SET status='expired', expiry_reason=?, expiry_price=?
-                   WHERE id=? AND status='active'""",
-                (reason, kp.price, sig["id"]),
+                text("""UPDATE signals
+                   SET status = 'expired', expiry_reason = :reason, expiry_price = :price
+                   WHERE id = :id AND status = 'active'"""),
+                {"reason": reason, "price": kp.price, "id": sig["id"]},
             )
         newly.append({**sig, "expiry_reason": reason, "expiry_price": kp.price})
 
@@ -300,29 +387,28 @@ def unnotified_expired_signals() -> List[Dict]:
     """만료 알림 아직 안 보낸 시그널 목록."""
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT * FROM signals
-               WHERE status='expired'
+            text("""SELECT * FROM signals
+               WHERE status = 'expired'
                  AND (expiry_notified IS NULL OR expiry_notified = 0)
-               ORDER BY id ASC"""
+               ORDER BY id ASC""")
         ).fetchall()
-        return [dict(r) for r in rows]
+        return _rows_to_dicts(rows)
 
 
 def mark_expiry_notified(signal_ids: List[int]) -> None:
     if not signal_ids:
         return
-    placeholders = ",".join("?" for _ in signal_ids)
+    stmt = text("UPDATE signals SET expiry_notified = 1 WHERE id IN :ids").bindparams(
+        bindparam("ids", expanding=True)
+    )
     with get_conn() as conn:
-        conn.execute(
-            f"UPDATE signals SET expiry_notified=1 WHERE id IN ({placeholders})",
-            tuple(signal_ids),
-        )
+        conn.execute(stmt, {"ids": list(signal_ids)})
 
 
 def _evaluate_single_outcome(sig: dict) -> Optional[dict]:
     """단일 시그널 outcome 평가. 시간 미경과 or 데이터 부족 시 None.
 
-    반환: {'outcome', 'outcome_max', 'outcome_min', 'first_hit'} 또는 None
+    반환: {'outcome', 'outcome_max', 'outcome_min'} 또는 None
     - outcome: 'WIN' (target 먼저 도달), 'LOSS' (stop 먼저), 'TIME_EXIT' (둘 다 안 도달)
     """
     from datetime import datetime as _dt
@@ -392,23 +478,20 @@ def _evaluate_single_outcome(sig: dict) -> Optional[dict]:
     }
 
 
-import pandas as pd  # outcome 평가용
-
-
 def evaluate_pending_outcomes(limit: int = 50) -> int:
     """미평가(outcome IS NULL) 시그널들 중 시간 경과한 것 일괄 평가.
     반환: 새로 평가된 시그널 수.
     """
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT * FROM signals
-               WHERE outcome IS NULL AND signal_type='BUY'
+            text("""SELECT * FROM signals
+               WHERE outcome IS NULL AND signal_type = 'BUY'
                  AND created_at IS NOT NULL
                ORDER BY created_at ASC
-               LIMIT ?""",
-            (limit,),
+               LIMIT :lim"""),
+            {"lim": limit},
         ).fetchall()
-        pending = [dict(r) for r in rows]
+        pending = _rows_to_dicts(rows)
 
     evaluated = 0
     for sig in pending:
@@ -417,17 +500,17 @@ def evaluate_pending_outcomes(limit: int = 50) -> int:
             continue
         with get_conn() as conn:
             conn.execute(
-                """UPDATE signals
-                   SET outcome=?, outcome_max=?, outcome_min=?,
-                       outcome_evaluated_at=?
-                   WHERE id=?""",
-                (
-                    result["outcome"],
-                    result["outcome_max"],
-                    result["outcome_min"],
-                    datetime.now().isoformat(),
-                    sig["id"],
-                ),
+                text("""UPDATE signals
+                   SET outcome = :o, outcome_max = :omax, outcome_min = :omin,
+                       outcome_evaluated_at = :ea
+                   WHERE id = :id"""),
+                {
+                    "o": result["outcome"],
+                    "omax": result["outcome_max"],
+                    "omin": result["outcome_min"],
+                    "ea": datetime.now().isoformat(),
+                    "id": sig["id"],
+                },
             )
         evaluated += 1
     return evaluated
@@ -438,14 +521,14 @@ def get_outcome_stats(days: int = 30) -> dict:
     since = (datetime.now() - timedelta(days=days)).isoformat()
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT outcome, COUNT(*) as n FROM signals
-               WHERE signal_type='BUY' AND created_at >= ?
+            text("""SELECT outcome, COUNT(*) as n FROM signals
+               WHERE signal_type = 'BUY' AND created_at >= :since
                  AND outcome IS NOT NULL
-               GROUP BY outcome""",
-            (since,),
+               GROUP BY outcome"""),
+            {"since": since},
         ).fetchall()
 
-    counts = {r["outcome"]: r["n"] for r in rows}
+    counts = {r._mapping["outcome"]: r._mapping["n"] for r in rows}
     win = counts.get("WIN", 0)
     loss = counts.get("LOSS", 0)
     time_exit = counts.get("TIME_EXIT", 0)
@@ -464,8 +547,8 @@ def get_outcome_stats(days: int = 30) -> dict:
 def mark_signal_acted(signal_id: int) -> None:
     with get_conn() as conn:
         conn.execute(
-            "UPDATE signals SET status='acted' WHERE id=?",
-            (signal_id,),
+            text("UPDATE signals SET status = 'acted' WHERE id = :id"),
+            {"id": signal_id},
         )
 
 
@@ -482,55 +565,58 @@ def open_position_from_signal(
         raise ValueError(f"Signal {signal_id} not found")
 
     # 시그널 ref_price가 아닌 실제 체결가 기준으로 익절/손절을 재계산.
-    # 카카오페이에서 더 싸게 체결됐다면 그 이득이 권고가에 반영되도록.
     target = buy_price * (1 + config.signal.target_return)
     stop = buy_price * (1 + config.signal.stop_loss)
     currency = "KRW" if sig["market"] in ("KOSPI", "KOSDAQ") else "USD"
+    now = datetime.now().isoformat()
 
     with get_conn() as conn:
-        cur = conn.execute(
-            """INSERT INTO positions
+        result = conn.execute(
+            text("""INSERT INTO positions
                (signal_id, ticker, market, name, buy_price, quantity, remaining_qty,
                 buy_time, target_price, stop_loss, signal_conf, currency, source)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                signal_id,
-                sig["ticker"],
-                sig["market"],
-                sig.get("name"),
-                buy_price,
-                quantity,
-                quantity,
-                datetime.now().isoformat(),
-                target,
-                stop,
-                sig.get("confidence"),
-                currency,
-                "manual",
-            ),
+               VALUES (:signal_id, :ticker, :market, :name, :buy_price, :quantity, :remaining,
+                       :buy_time, :target, :stop, :sigconf, :currency, :source)
+               RETURNING id"""),
+            {
+                "signal_id": signal_id,
+                "ticker": sig["ticker"],
+                "market": sig["market"],
+                "name": sig.get("name"),
+                "buy_price": buy_price,
+                "quantity": quantity,
+                "remaining": quantity,
+                "buy_time": now,
+                "target": target,
+                "stop": stop,
+                "sigconf": sig.get("confidence"),
+                "currency": currency,
+                "source": "manual",
+            },
         )
-        position_id = cur.lastrowid
+        position_id = int(result.scalar_one())
 
         amount = buy_price * quantity
         conn.execute(
-            """INSERT INTO trades
+            text("""INSERT INTO trades
                (position_id, signal_id, ticker, market, name, action, price, quantity,
                 amount, fee, source, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                position_id,
-                signal_id,
-                sig["ticker"],
-                sig["market"],
-                sig.get("name"),
-                "BUY",
-                buy_price,
-                quantity,
-                amount,
-                fee,
-                "manual",
-                datetime.now().isoformat(),
-            ),
+               VALUES (:position_id, :signal_id, :ticker, :market, :name, :action, :price, :qty,
+                       :amount, :fee, :source, :created_at)"""),
+            {
+                "position_id": position_id,
+                "signal_id": signal_id,
+                "ticker": sig["ticker"],
+                "market": sig["market"],
+                "name": sig.get("name"),
+                "action": "BUY",
+                "price": buy_price,
+                "qty": quantity,
+                "amount": amount,
+                "fee": fee,
+                "source": "manual",
+                "created_at": now,
+            },
         )
 
     mark_signal_acted(signal_id)
@@ -545,14 +631,14 @@ def close_position_partial(
     exit_reason: str = "MANUAL",
 ) -> None:
     with get_conn() as conn:
-        pos = conn.execute(
-            "SELECT * FROM positions WHERE id=? AND status='open'",
-            (position_id,),
+        row = conn.execute(
+            text("SELECT * FROM positions WHERE id = :id AND status = 'open'"),
+            {"id": position_id},
         ).fetchone()
+        pos = _row_to_dict(row)
         if not pos:
             raise ValueError(f"Open position {position_id} not found")
 
-        pos = dict(pos)
         qty = min(quantity, pos["remaining_qty"])
         if qty <= 0:
             raise ValueError("Invalid sell quantity")
@@ -562,53 +648,55 @@ def close_position_partial(
         profit_loss = (sell_price - buy_price) * qty - fee
         buy_time = datetime.fromisoformat(pos["buy_time"])
         hold_hours = (datetime.now() - buy_time).total_seconds() / 3600
-
         amount = sell_price * qty
+        now = datetime.now().isoformat()
+
         conn.execute(
-            """INSERT INTO trades
+            text("""INSERT INTO trades
                (position_id, signal_id, ticker, market, name, action, price, quantity,
                 amount, fee, profit_loss, profit_pct, hold_hours, exit_reason, source, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                position_id,
-                pos.get("signal_id"),
-                pos["ticker"],
-                pos["market"],
-                pos.get("name"),
-                "SELL",
-                sell_price,
-                qty,
-                amount,
-                fee,
-                profit_loss,
-                profit_pct,
-                hold_hours,
-                exit_reason,
-                "manual",
-                datetime.now().isoformat(),
-            ),
+               VALUES (:position_id, :signal_id, :ticker, :market, :name, :action, :price, :qty,
+                       :amount, :fee, :pl, :pp, :hh, :reason, :source, :created_at)"""),
+            {
+                "position_id": position_id,
+                "signal_id": pos.get("signal_id"),
+                "ticker": pos["ticker"],
+                "market": pos["market"],
+                "name": pos.get("name"),
+                "action": "SELL",
+                "price": sell_price,
+                "qty": qty,
+                "amount": amount,
+                "fee": fee,
+                "pl": profit_loss,
+                "pp": profit_pct,
+                "hh": hold_hours,
+                "reason": exit_reason,
+                "source": "manual",
+                "created_at": now,
+            },
         )
 
         remaining = pos["remaining_qty"] - qty
         if remaining <= 0:
             conn.execute(
-                "UPDATE positions SET remaining_qty=0, status='closed' WHERE id=?",
-                (position_id,),
+                text("UPDATE positions SET remaining_qty = 0, status = 'closed' WHERE id = :id"),
+                {"id": position_id},
             )
         else:
             conn.execute(
-                "UPDATE positions SET remaining_qty=? WHERE id=?",
-                (remaining, position_id),
+                text("UPDATE positions SET remaining_qty = :r WHERE id = :id"),
+                {"r": remaining, "id": position_id},
             )
 
 
 def get_open_positions() -> List[Dict]:
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT * FROM positions WHERE status='open' AND remaining_qty > 0
-               ORDER BY buy_time DESC"""
+            text("""SELECT * FROM positions WHERE status = 'open' AND remaining_qty > 0
+               ORDER BY buy_time DESC""")
         ).fetchall()
-        return [dict(r) for r in rows]
+        return _rows_to_dicts(rows)
 
 
 # ── 이력 / 통계 ───────────────────────────────────────────
@@ -616,39 +704,104 @@ def get_open_positions() -> List[Dict]:
 def get_trade_history(limit: int = 50) -> List[Dict]:
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM trades ORDER BY created_at DESC LIMIT ?",
-            (limit,),
+            text("SELECT * FROM trades ORDER BY created_at DESC LIMIT :lim"),
+            {"lim": limit},
         ).fetchall()
-        return [dict(r) for r in rows]
+        return _rows_to_dicts(rows)
 
 
 def get_performance_summary() -> Dict:
     with get_conn() as conn:
         total = conn.execute(
-            "SELECT COUNT(*) as cnt FROM trades WHERE action='SELL'"
-        ).fetchone()["cnt"]
+            text("SELECT COUNT(*) AS cnt FROM trades WHERE action = 'SELL'")
+        ).scalar() or 0
 
         wins = conn.execute(
-            "SELECT COUNT(*) as cnt FROM trades WHERE action='SELL' AND profit_pct > 0"
-        ).fetchone()["cnt"]
+            text("SELECT COUNT(*) AS cnt FROM trades WHERE action = 'SELL' AND profit_pct > 0")
+        ).scalar() or 0
 
         avg_return = conn.execute(
-            "SELECT AVG(profit_pct) as avg FROM trades WHERE action='SELL'"
-        ).fetchone()["avg"] or 0.0
+            text("SELECT AVG(profit_pct) AS avg FROM trades WHERE action = 'SELL'")
+        ).scalar() or 0.0
 
         avg_hold = conn.execute(
-            "SELECT AVG(hold_hours) as avg FROM trades WHERE action='SELL'"
-        ).fetchone()["avg"] or 0.0
+            text("SELECT AVG(hold_hours) AS avg FROM trades WHERE action = 'SELL'")
+        ).scalar() or 0.0
 
         total_profit = conn.execute(
-            "SELECT SUM(profit_loss) as total FROM trades WHERE action='SELL'"
-        ).fetchone()["total"] or 0.0
+            text("SELECT SUM(profit_loss) AS total FROM trades WHERE action = 'SELL'")
+        ).scalar() or 0.0
 
     return {
-        "total_trades": total,
-        "winning_trades": wins,
+        "total_trades": int(total),
+        "winning_trades": int(wins),
         "win_rate": (wins / total * 100) if total > 0 else 0.0,
-        "avg_return_pct": avg_return,
-        "avg_hold_hours": avg_hold,
-        "total_profit": total_profit,
+        "avg_return_pct": float(avg_return),
+        "avg_hold_hours": float(avg_hold),
+        "total_profit": float(total_profit),
     }
+
+
+# ── 인증 토큰 / 앱 상태 (Cloud Migration Phase 2) ──────────────
+
+def get_auth_token(service: str) -> Optional[Dict]:
+    """service='kakao'|'kis'. 없으면 None."""
+    with get_conn() as conn:
+        row = conn.execute(
+            text("SELECT * FROM auth_tokens WHERE service = :s"),
+            {"s": service},
+        ).fetchone()
+        return _row_to_dict(row)
+
+
+def save_auth_token(
+    service: str,
+    access_token: Optional[str],
+    refresh_token: Optional[str] = None,
+    expires_at: Optional[str] = None,
+    refresh_expires_at: Optional[str] = None,
+) -> None:
+    now = datetime.now().isoformat()
+    with get_conn() as conn:
+        # UPSERT: sqlite/postgres 모두 ON CONFLICT 지원 (sqlite 3.24+, postgres 9.5+)
+        conn.execute(
+            text("""INSERT INTO auth_tokens
+               (service, access_token, refresh_token, expires_at, refresh_expires_at, updated_at)
+               VALUES (:s, :a, :r, :e, :re, :u)
+               ON CONFLICT(service) DO UPDATE SET
+                 access_token = excluded.access_token,
+                 refresh_token = excluded.refresh_token,
+                 expires_at = excluded.expires_at,
+                 refresh_expires_at = excluded.refresh_expires_at,
+                 updated_at = excluded.updated_at"""),
+            {
+                "s": service,
+                "a": access_token,
+                "r": refresh_token,
+                "e": expires_at,
+                "re": refresh_expires_at,
+                "u": now,
+            },
+        )
+
+
+def get_app_state(key: str) -> Optional[str]:
+    with get_conn() as conn:
+        row = conn.execute(
+            text("SELECT value FROM app_state WHERE key = :k"),
+            {"k": key},
+        ).fetchone()
+        return row._mapping["value"] if row else None
+
+
+def set_app_state(key: str, value: str) -> None:
+    now = datetime.now().isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            text("""INSERT INTO app_state (key, value, updated_at)
+               VALUES (:k, :v, :u)
+               ON CONFLICT(key) DO UPDATE SET
+                 value = excluded.value,
+                 updated_at = excluded.updated_at"""),
+            {"k": key, "v": value, "u": now},
+        )

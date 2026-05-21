@@ -87,18 +87,20 @@ def _market_summary_cached():
 @st.cache_data(ttl=30)
 def _outcome_trend_df(days: int = 30) -> pd.DataFrame:
     """일별 outcome 카운트 + win rate."""
+    from sqlalchemy import text
     since = (datetime.now() - timedelta(days=days)).isoformat()
+    # SUBSTR로 일자 추출 — sqlite/postgres 모두 호환 (DATE() 함수는 입력 타입 의존, 우린 ISO 문자열).
     with db.get_conn() as conn:
         rows = conn.execute(
-            """SELECT DATE(created_at) as d, outcome, COUNT(*) as n
+            text("""SELECT SUBSTR(created_at, 1, 10) AS d, outcome, COUNT(*) AS n
                FROM signals
-               WHERE signal_type='BUY' AND created_at >= ? AND outcome IS NOT NULL
-               GROUP BY d, outcome ORDER BY d ASC""",
-            (since,),
+               WHERE signal_type='BUY' AND created_at >= :since AND outcome IS NOT NULL
+               GROUP BY SUBSTR(created_at, 1, 10), outcome ORDER BY d ASC"""),
+            {"since": since},
         ).fetchall()
     if not rows:
         return pd.DataFrame()
-    df = pd.DataFrame([dict(r) for r in rows])
+    df = pd.DataFrame([dict(r._mapping) for r in rows])
     pivot = df.pivot_table(index="d", columns="outcome", values="n", fill_value=0).reset_index()
     for col in ("WIN", "LOSS", "TIME_EXIT"):
         if col not in pivot.columns:
@@ -112,15 +114,16 @@ def _outcome_trend_df(days: int = 30) -> pd.DataFrame:
 
 @st.cache_data(ttl=30)
 def _signal_count_trend(days: int = 30) -> pd.DataFrame:
+    from sqlalchemy import text
     since = (datetime.now() - timedelta(days=days)).isoformat()
     with db.get_conn() as conn:
         rows = conn.execute(
-            """SELECT DATE(created_at) as d, COUNT(*) as n
-               FROM signals WHERE signal_type='BUY' AND created_at >= ?
-               GROUP BY d ORDER BY d ASC""",
-            (since,),
+            text("""SELECT SUBSTR(created_at, 1, 10) AS d, COUNT(*) AS n
+               FROM signals WHERE signal_type='BUY' AND created_at >= :since
+               GROUP BY SUBSTR(created_at, 1, 10) ORDER BY d ASC"""),
+            {"since": since},
         ).fetchall()
-    return pd.DataFrame([dict(r) for r in rows])
+    return pd.DataFrame([dict(r._mapping) for r in rows])
 
 
 @st.cache_data(ttl=60)

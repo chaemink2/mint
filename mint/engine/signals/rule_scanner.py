@@ -206,12 +206,13 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
 
     # 오늘 이미 발생한 BUY 카운트 → max_daily_buys 한도
     from datetime import datetime as _dt
+    from sqlalchemy import text as _text
     today_start = _dt.now().strftime("%Y-%m-%d") + "T00:00:00"
     with db.get_conn() as conn:
         today_count = conn.execute(
-            "SELECT COUNT(*) FROM signals WHERE signal_type='BUY' AND created_at >= ?",
-            (today_start,),
-        ).fetchone()[0]
+            _text("SELECT COUNT(*) FROM signals WHERE signal_type='BUY' AND created_at >= :start"),
+            {"start": today_start},
+        ).scalar() or 0
     daily_limit = config.signal.max_daily_buys
     remaining = max(0, daily_limit - today_count)
     if remaining == 0:

@@ -218,6 +218,7 @@ def cmd_daily_summary():
         log.info("Outcomes evaluated for %d signal(s)", evaluated)
 
     from datetime import datetime, timedelta
+    from sqlalchemy import text
     from portfolio.db import get_conn
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -227,10 +228,10 @@ def cmd_daily_summary():
 
     with get_conn() as conn:
         buy_today = conn.execute(
-            """SELECT COUNT(*) FROM signals
-               WHERE signal_type='BUY' AND created_at >= ? AND created_at < ?""",
-            (start, end),
-        ).fetchone()[0]
+            text("""SELECT COUNT(*) FROM signals
+               WHERE signal_type='BUY' AND created_at >= :start AND created_at < :end"""),
+            {"start": start, "end": end},
+        ).scalar() or 0
 
     positions = get_open_positions()
     advices = evaluate_positions(positions) if positions else []

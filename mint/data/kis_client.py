@@ -48,6 +48,19 @@ def _has_credentials() -> bool:
 
 
 def _load_cached_token() -> Optional[dict]:
+    """1순위 DB, 2순위 파일(legacy — DB로 자동 마이그레이션)."""
+    try:
+        from portfolio.db import get_auth_token
+        row = get_auth_token("kis")
+    except Exception:
+        row = None
+    if row and row.get("access_token") and row.get("expires_at"):
+        try:
+            if datetime.fromisoformat(row["expires_at"]) > datetime.now():
+                return {"access_token": row["access_token"], "expires_at": row["expires_at"]}
+        except Exception:
+            pass
+
     if not os.path.exists(_TOKEN_CACHE_PATH):
         return None
     try:
@@ -57,25 +70,38 @@ def _load_cached_token() -> Optional[dict]:
             return None
         if datetime.fromisoformat(data["expires_at"]) <= datetime.now():
             return None
+        # 1회 마이그레이션
+        try:
+            from portfolio.db import save_auth_token
+            save_auth_token("kis", access_token=data["access_token"], expires_at=data["expires_at"])
+            log.info("KIS token migrated from file to DB")
+        except Exception:
+            pass
         return data
     except Exception:
         return None
 
 
 def _save_cached_token(token: str, expires_in_sec: int) -> None:
+    expires_at = (datetime.now() + timedelta(seconds=max(0, expires_in_sec - 300))).isoformat()
+    try:
+        from portfolio.db import save_auth_token, DATABASE_URL as _DB_URL
+        save_auth_token("kis", access_token=token, expires_at=expires_at)
+    except Exception as e:
+        log.debug("KIS token DB save failed: %s", e)
+
+    # 로컬 sqlite 운영일 때만 파일 보존
+    try:
+        from portfolio.db import DATABASE_URL as _DB_URL
+        if not _DB_URL.startswith("sqlite"):
+            return
+    except Exception:
+        pass
     try:
         with open(_TOKEN_CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "access_token": token,
-                    "expires_at": (
-                        datetime.now() + timedelta(seconds=max(0, expires_in_sec - 300))
-                    ).isoformat(),
-                },
-                f,
-            )
+            json.dump({"access_token": token, "expires_at": expires_at}, f)
     except Exception as e:
-        log.debug("KIS token cache save failed: %s", e)
+        log.debug("KIS token file save failed: %s", e)
 
 
 def _issue_token() -> Optional[str]:

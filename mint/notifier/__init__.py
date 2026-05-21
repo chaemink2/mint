@@ -173,23 +173,56 @@ def _format_exit_advice(advice) -> str:
     return "\n".join(line for line in lines if line)
 
 
+_NOTIFIER_STATE_KEY = "notifier_state"
+
+
 def _load_state() -> dict:
+    """1순위 DB(app_state['notifier_state']), 2순위 파일 — DB로 자동 마이그레이션."""
+    try:
+        from portfolio.db import get_app_state
+        raw = get_app_state(_NOTIFIER_STATE_KEY)
+        if raw:
+            return json.loads(raw)
+    except Exception as e:
+        log.debug("notifier state DB load failed: %s", e)
+
     if not os.path.exists(_HEARTBEAT_STATE):
         return {}
     try:
         with open(_HEARTBEAT_STATE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            state = json.load(f)
+        # 1회 마이그레이션
+        try:
+            from portfolio.db import set_app_state
+            set_app_state(_NOTIFIER_STATE_KEY, json.dumps(state, ensure_ascii=False))
+            log.info("Notifier state migrated from file to DB")
+        except Exception:
+            pass
+        return state
     except Exception:
         return {}
 
 
 def _save_state(state: dict) -> None:
+    """DB 우선. 로컬 sqlite 운영일 때만 파일 동시 보존."""
+    try:
+        from portfolio.db import set_app_state
+        set_app_state(_NOTIFIER_STATE_KEY, json.dumps(state, ensure_ascii=False))
+    except Exception as e:
+        log.debug("notifier state DB save failed: %s", e)
+
+    try:
+        from portfolio.db import DATABASE_URL as _DB_URL
+        if not _DB_URL.startswith("sqlite"):
+            return
+    except Exception:
+        pass
     try:
         os.makedirs(os.path.dirname(_HEARTBEAT_STATE), exist_ok=True)
         with open(_HEARTBEAT_STATE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        log.debug("notifier state save failed: %s", e)
+        log.debug("notifier state file save failed: %s", e)
 
 
 _STATE_LOCK_PATH = _HEARTBEAT_STATE + ".lock"
