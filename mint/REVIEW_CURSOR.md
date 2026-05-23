@@ -778,3 +778,236 @@ read-modify-write without file lock. Windows 스케줄러 **「새 인스턴스 
 ---
 
 *5/23 4차 검토 요청. 코드 변경 없음.*
+
+---
+
+# 📨 Cursor 4차 검토 (2026-05-19)
+
+> **검토일**: 2026-05-19  
+> **입력**: `REVIEW_CURSOR.md` 4차 요청(A~H), `OPERATION_WEEK1.md`, `CLAUDE.md` 픽업 가이드, `CURSOR.md` 이력, 코드·workflow (로컬 워크스페이스, main 기준 `c55e8e8` 이후 동일 트리)  
+> **원칙**: `CLAUDE.md` / `CURSOR.md` / `OPERATION_WEEK1.md` **미수정**. 코드 변경 없음 — 승인 항목만 다음 라운드.
+
+---
+
+## 0. 총평 (사용자 질문에 대한 직답)
+
+| 질문 | 답 |
+|------|-----|
+| **5/22~23 대량 변경이 1주 운영 전에 안전한가?** | **🟡 예 — 운영 중단(🔴) 수준의 결함은 없음.** Cloud·DB·dynamic exit는 구조적으로 타당하나, **추천 “성능”을 과대 해석하면 안 됨.** |
+| **종목 추천 성능은 개선됐는가?** | **부분만.** dynamic/regime은 **청산·메시지·outcome 정의**를 맞춤. **진입 품질(어떤 종목을 고르는가)은 ML+룰+분봉과 동일** — 학습 라벨과도 아직 불일치. |
+| **분기 시나리오** | **🟡 경미 이슈 다수** → `OPERATION_WEEK1.md` 1주 GHA 운영 진행. Neon 토큰·`DATABASE_URL`만 사전 확인 필수. |
+
+**한 줄:** 인프라는 **베타→운영** 단계로 올라갔고, **알파(초과 수익) 검증은 아직 outcome·실체결 데이터가 필요**하다. dynamic exit multiplier는 **문서화된 임의값**이며, 0.79 precision은 **live 파이프라인 수치가 아니다.**
+
+---
+
+## 1. 종목 추천 성능 — 비판·객관 분석 (핵심)
+
+### 1.1 파이프라인이 실제로 최적화하는 것
+
+```
+[유니버스 200] → 일봉 룰(모멘텀≥3%, risk≤45, 거래량) → ML P(win)≥0.60 → 분봉(vol_spike≥2.0) → dynamic target/stop/hold → DB·카톡
+```
+
+| 층 | 역할 | 검증 근거 | 한계 |
+|----|------|-----------|------|
+| **모멘텀 ≥3%** | `_estimate_expected_return_1d` 휴리스틱 | 이름과 달리 **“24h +3% 확률”이 아님** | 약세일 funnel 0건은 **정상** (5/20·문서 funnel) |
+| **ML 0.60** | binary: 고정 +3.5%/-2%, **1일** 시뮬 exit 후 `profit>0` | 5/19c val: AUC **0.582**, thr 0.60 precision **~0.79**, 일 **~1.3건** (분봉·dedup **전**) | AUC 낮음 → **순위기** 수준. **분봉 미학습** → train/serve gap |
+| **분봉** | 장중 확인(AND) | notifier funnel: ML 통과의 **~40%** 추가 탈락 | 시그널 수 ↓, live precision **미측정** |
+| **dynamic exit** | 통과 **후** target/stop/hold | ATR×regime, cap 1.5~15% / 0.5~5% / 6~72h | **백테스트·calibration 없음**. ML·학습 라벨 **미반영** |
+| **regime** | exit multiplier만 | yfinance ^KS11/^KQ11 | **진입 차단 없음** — STRONG_BEAR에서도 BUY 가능 |
+
+**결론:** 사용자 paradigm shift(“종목·시장별 동적”)는 **청산 쪽만** 반영됐다. **“더 좋은 종목을 고른다”**는 주장은 **아직 코드·데이터로 뒷받침되지 않는다.**
+
+### 1.2 학습–추론–평가 삼각 불일치 (구조적 이슈)
+
+1. **`training.py`** 라벨: `config.signal.target_return` / `stop_loss` **고정**으로 `_simulate_exit` → `label = profit>0` (dynamic/regime **없음**).  
+2. **추론:** `rule_scanner`는 ML 통과 후 **`compute_dynamic_exit`**으로 가격·hold 변경.  
+3. **outcome:** DB에 저장된 **동적** `target_price`/`stop_price`/`max_hold_hours`로 `_evaluate_single_outcome` 평가 — **방향은 맞음**.  
+4. **그러나** ML 게이트는 여전히 **“고정 3.5%/2%/24h에 맞는 종목인가?”**를 학습한 확률. 동적 target이 +8%인 종목은 **ML이 과소/과대 평가**할 수 있음.
+
+→ **성능 개선을 원하면** 카드 **N(calibration)** 또는 **m(라벨을 dynamic exit 기준으로 재정의)** 이 선행되어야 한다. 지금 상태에서 “ML 79% 승률”을 카톡·대시보드에 암시하면 **과장**이다.
+
+### 1.3 dynamic exit·regime의 성능 함의
+
+| 항목 | 판정 | 설명 |
+|------|------|------|
+| ATR×1.5 target | 🟡 | 변동 큰 종목에 넓은 target은 직관적이나, **노이즈·false breakout**도 함께 커짐. 검증 없음. |
+| STRONG_BULL stop×0.7 | 🟡 | 강세에서 타이트한 stop → **일봉 노이즈 손절** 빈도 ↑ 가능. |
+| hold 6~72h | 🟡 | `horizon_days = max(1, horizon_h // 24)` → **6h도 일봉 1봉** first-hit. hold 차별화는 **DB·카톡에만** 있고 outcome 정밀도는 제한적. |
+| `atr_pct = risk/500` | 🟡 | risk cap 100 → atr_pct **0.2 상한** → 고변동 종목은 **cap 구간에 몰림**. dynamic이 개별화를 못 함. |
+| regime 진입 미사용 | 🟡 | 약세장 **매수 억제 없음** — “지수 추종” 비전의 **절반만** 구현. |
+
+### 1.4 운영 데이터로 읽을 수 있는 것 (5/20~21 funnel)
+
+- **5/20:** 모멘텀 0 → 시그널 0 (시장·필터 설계대로).  
+- **5/21:** ML 5 → 분봉 2 → 시그널 2 (분봉이 **실질 병목**).  
+- **기대 시그널 밀도:** GHA 10분×200종 기준 **하루 0~3건**이 정상. 0건 주도 이상 징후 아님.
+
+### 1.5 “성능”을 제대로 재는 방법 (1주 후)
+
+1. **outcome WIN/LOSS/TIME_EXIT** — 동적 target 기준 (이미 코드 경로 있음).  
+2. **카카오페이 수동 체결** vs 시그널 ref_price 슬리피지.  
+3. funnel: `passed_ml` / `passed_minute` / `signals_created` 추이.  
+4. (선택) 카드 **D** 페이퍼로 ML 0.79 vs **동일 파이프라인** 가상 승률 비교.
+
+---
+
+## 2. A~H 항목별 검토
+
+### A. SQLAlchemy 리팩터 회귀
+
+| # | 포인트 | 등급 | 판정 |
+|---|--------|------|------|
+| 1 | `_existing_columns` PRAGMA vs `information_schema` | 🟢 | 분기 정확. Postgres `table_name` 소문자 일치 전제(일반적). |
+| 2 | SQLite `PRAGMA foreign_keys=ON` | 🟢 | connect 이벤트. 실패 시 pass — FK 미적용만, 크래시 아님. |
+| 3 | AUTOINCREMENT vs BIGSERIAL | 🟢 | **신규 Postgres**는 BIGSERIAL. 기존 sqlite 파일 로컬 유지 시 호환. Cloud는 Neon 신규 스키마. |
+| 4 | `bindparam(expanding=True)` | 🟢 | SQLAlchemy 2.x 표준. Postgres에서 동작 설계. (로컬 sqlite만으로는 미검증 — **1주 운영 중 expiry batch가 실증**) |
+| 5 | `ON CONFLICT` UPSERT | 🟢 | Python 3.13 + GHA ubuntu sqlite 충분. `auth_tokens`·`app_state`에 적합. |
+| 6 | `RETURNING id` | 🟢 | sqlite 3.35+ / postgres 모두. `log_signal`·`open_position` 일관. |
+
+**추가 🟡:** `created_at`/`today_start`가 여전히 `datetime.now()`(GHA=UTC) — outcome은 `to_kst()`로 보정했으나 **일일 BUY 한도·funnel·daily-summary “오늘”** 은 KST와 어긋날 수 있음 → **R2** 참고.
+
+---
+
+### B. 토큰/상태 DB화
+
+| # | 포인트 | 등급 | 판정 |
+|---|--------|------|------|
+| 1 | 순환 import | 🟢 | `kakao` → lazy `portfolio.db` import. `db`가 kakao를 상단 import하지 않음. |
+| 2 | GHA 첫 호출 토큰 없음 | 🟡 | `_load_tokens` None → `send_text` skip + warning. **Neon에 kakao/kis 1회 시드 필수** (`OPERATION_WEEK1.md` 절차). |
+| 3 | 동시 refresh race | 🟡 | Kakao `threading.Lock()` 있음. **GHA job 간** 동시 refresh는 이론상 가능 — Kakao는 보통 허용, **KIS 일 1회 발급**은 `scan-kr`+`daily-summary` 겹침 시 중복 호출 주의(대부분 캐시 hit). |
+
+파일→DB 1회 마이그레이션 패턴: 🟢 합리적.
+
+---
+
+### C. GHA workflow
+
+| # | 포인트 | 등급 | 판정 |
+|---|--------|------|------|
+| 1 | secrets 로그 | 🟢 | workflow는 `${{ secrets.* }}`만. 코드에 token print 없음. stderr에 API body 전체 덤프 패턴 없음. |
+| 2 | timeout 10분 | 🟡 | 200종 cold start 시 **간헐적 초과** 가능 → **15분** 여유 권장(R4). |
+| 3 | scan-kr cron `*/10 0-6 * * 1-5` UTC | 🟢 | UTC 06:50 = KST **15:50** — 주석과 일치. |
+| 4 | daily-summary `35 6` UTC | 🟢 | KST **15:35** — 적절. |
+| 5 | outcomes `30 14` UTC | 🟢 | KST **23:30** — 15시 직전 시그널 24h 커버 보조. |
+
+**추가 🟡:** 로컬 Windows 스케줄러와 GHA **이중 실행** 기간(5/28까지)이면 dedup·카톡 중복 가능 — `signal_dedup_hours`·notifier state로 완화되나 **완전 방지 아님**.
+
+`concurrency` + `cancel-in-progress: false`: 🟢 겹침 run 허용(일봉 스캔에 무해한 편).
+
+---
+
+### D. Dynamic exit (가장 중요)
+
+| # | 포인트 | 등급 | 판정 |
+|---|--------|------|------|
+| 1 | ATR×1.5 적정성 | 🟡 | 미검증 휴리스틱. **카드 N** 전까지 “합리적 가설” 수준. |
+| 2 | regime 비대칭 multiplier | 🟡 | STRONG_BULL stop 축소는 **의도와 trade-off** 명확히 문서화됨 — 데이터 fit 필요. |
+| 3 | hold 6h vs 일봉 outcome | 🟡 | **문제 맞음** — 단기 hold는 outcome이 **24h와 거의 동일 해상도**. “버그”라기보다 **알려진 한계**; 분봉 outcome은 별도 인프라. |
+| 4 | risk→atr 역산 | 🟡 | 수학적으로 `_risk_score` 정의와 일치. cap 100 시 **고변동 종목 동질화** — dynamic 이점 감소. |
+| 5 | NASDAQ 미적용 | 🟢 | US scan 비활성 시 **영향 없음**. 활성화 시 **일관성 깨짐** — 추후 US regime 또는 고정값 명시 필요. |
+
+코드 주석(`dynamic_exit.py` L11~16)과 구현 일치: 🟢 정직한 문서화.
+
+---
+
+### E. Market regime
+
+| # | 포인트 | 등급 | 판정 |
+|---|--------|------|------|
+| 1 | ret_5d 가중 0.5 | 🟡 | 단기 noise·갭에 민감. |
+| 2 | STRONG_BULL +0.04 | 🟡 | 5d +4.7% → STRONG_BULL은 **한국 단기 강세** 정의로는 가능. “강한”의 절대 기준은 사용자 결정 사안. |
+| 3 | yfinance 실패 → SIDEWAYS | 🟢 | 보수적. 장기 장애 시 ATR baseline만 적용 — **무해**. |
+| 4 | KOSPI/KOSDAQ 분리 | 🟢 | 설계 의도대로. 상관 높아 **실익은 작을 수 있음**. |
+| 5 | VKOSPI 미반영 | 🟢 | 향후 카드 C. |
+
+`volatility` 필드는 계산되나 **composite에 미사용** — 향후 feature 후보.
+
+---
+
+### F. 카톡 200자
+
+| # | 포인트 | 등급 | 판정 |
+|---|--------|------|------|
+| 1 | 라인 단위 truncate (아래→위 제거) | 🟢 | 핵심 4줄(제목·기준가·목표/손절·hold) 우선 유지. |
+| 2 | 실측 | 🟢 | 동적+regime+신선도+분봉 포함 예시 **189자** (`_truncate` 전후 동일, 200 미만). |
+| 3 | 축소 제안 | 🟢 | 현 구조로 충분. 초과 시 `모멘텀`·`분봉` 줄이 먼저 잘림 — 의도와 일치. |
+
+3차 P4(200자) 재발: **🟢 해소에 가까움** (다만 한 라인이 200자 넘는 극단 케이스는 `…` 처리).
+
+---
+
+### G. Streamlit / public repo 보안
+
+| # | 포인트 | 등급 | 판정 |
+|---|--------|------|------|
+| 1 | tracked 파일 secret grep | 🟢 | 워크스페이스 `git grep` 기준 **실키·postgresql URL 하드코딩 없음**. `.env.example` placeholder만. |
+| 2 | `OPERATION_WEEK1.md` Neon URL 예시 | 🟡 | **placeholder** 형태 — 실비밀번호 커밋 금지 재확인. |
+| 3 | `mint_lgbm.joblib` in repo | 🟢 | weights만 — 학습 raw row 노출 없음. |
+| 4 | Streamlit traceback | 🟡 | secrets는 TOML; **에러 시 DATABASE_URL** 노출 가능 — Streamlit 로그 접근 제한 운영 습관. |
+
+---
+
+### H. 1주 후 다음 카드 ROI (Cursor 의견)
+
+| 순위 | 카드 | ROI | 비고 |
+|------|------|-----|------|
+| **0** | **운영 전제** Neon kakao/kis 토큰 + GHA green 3일 | ★★★★★ | 코드 아님 |
+| **1** | **P2** `today_kst()` 일원화 (funnel·max_daily·notifier·daily-summary) | ★★★★☆ | Cloud에서 **가장 흔한 off-by-one** |
+| **2** | **카드 N** dynamic multiplier calibration (outcome 20건+) | ★★★★☆ | paradigm shift **성능** 완성 |
+| **3** | **카드 D** 페이퍼 | ★★★★☆ | ML 0.79 vs live 파이프라인 분리 검증 |
+| **4** | **P1** 지수 표시 (Naver 파싱) | ★★★☆☆ | 시그널 무관, UX |
+| **5** | **카드 m** 재학습 (regime feature + dynamic 라벨) | ★★★☆☆ | 표본 적을 때 **과적합** 위험 — **N 또는 2주 outcome 후** |
+| **6** | **카드 C** 수급/VKOSPI | ★★☆☆☆ | 작업량 대비 1주 내 ROI 낮음 |
+| **7** | GHA timeout 15분 | ★★☆☆☆ | 한 줄 설정 |
+
+**비추천 (이번 주):** ML 0.55, 분봉 OFF, multiplier 임의 대폭 변경(데이터 없이), Full 재마이그레이션.
+
+---
+
+## 3. 구현 헛점·오류 점검 (요약)
+
+| 이슈 | 등급 | 설명 |
+|------|------|------|
+| ML 학습 라벨 vs dynamic exit | 🟡 | **설계 불일치** — 크래시 아님. 성능 주장 시 반드시 구분. |
+| train에 분봉 없음 / infer에 분봉 ON | 🟡 | 3차부터 알려진 gap. |
+| `datetime.now()` vs `today_kst()` | 🟡 | GHA UTC 경계 — P2. |
+| `maybe_send_midday_ping` 시간대 | 🟡 | `datetime.now().hour` — GHA UTC에서 **우연히** KST 11~13과 겹침. `now_kst()`로 명시화 권장. |
+| outcome 6h vs 일봉 | 🟡 | 문서화된 한계. |
+| 이중 스케줄러(로컬+GHA) | 🟡 | 5/28까지 중복 알림 가능. |
+| 3차 P1~P3 (학습필터·scan_us expiry·max_daily) | 🟢 | 코드에 **반영 확인** (`training.py` L70~79, `main.py` scan_us, `rule_scanner` L231~244). |
+| dashboard `DATE()` | 🟢 | `SUBSTR(created_at,1,10)`로 **회귀 방지** 확인. |
+
+**🔴 운영 중단급:** Neon `DATABASE_URL`/kakao 토큰 미시드, 사용자가 repo에 실 secret push — **운영 절차 이슈**.
+
+---
+
+## 4. 승인 요청 목록 (4차 — 다음 라운드)
+
+| # | 항목 | 등급 | 기대 효과 |
+|---|------|------|-----------|
+| **R1** | `rule_scanner`·`main.cmd_daily_summary`·`accumulate_scan_stats`·`max_daily_buys`의 “오늘”을 **`today_kst()`** 로 통일 | 🟡 | KST 장·일일 한도·funnel 정합 |
+| **R2** | `maybe_send_midday_ping`·heartbeat 날짜/시간 **`now_kst()`** | 🟡 | GHA에서 점심 ping·중복 방지 신뢰 |
+| **R3** | GHA `timeout-minutes: 15` (scan-kr, daily-summary) | 🟡 | cold run 타임아웃 방지 |
+| **R4** | 1주 운영: **로컬 scan 스케줄러 OFF** 또는 GHA만 — 이중 실행 최소화 | 🟡 | 중복 카톡·DB 부하 |
+| **R5** | outcome 20건+ 후 **카드 N** (REGIME_MULT grid search 또는 Bayesian 간이 fit) | 🟡 | dynamic exit **성능** 근거 확보 |
+| **R6** | 카드 m: **라벨을 dynamic exit 시뮬**로 재정의 + (선택) regime feature | 🟡 | ML–청산 정합 (표본 충분 후) |
+| **R7** | P1 `market_index.py` Naver 파싱 수정 | 🟡 | 대시보드·일일요약 지수 UX |
+| **R8** | `scripts/audit_live_pipeline.py` — funnel+outcome CSV export (read-only) | 🟢 | 5/29 의사결정용 증거 |
+
+**이번 주 비추천:** multiplier 임의 변경, ML threshold 0.55, 분봉 OFF, 운영 중단 hotfix(현재 코드만으로는 불필요).
+
+---
+
+## 5. 사용자 결론 (5/29 의사결정 전)
+
+1. **1주 GHA 운영은 진행해도 된다** — 전제: Neon에 **kakao/kis 토큰** 존재, Actions 3일 연속 green.  
+2. **추천 품질**은 “ML 79%”가 아니라 **“엄격한 필터 통과 소수 종목 + 동적 R:R 안내”**로 이해할 것.  
+3. **dynamic exit**는 UX·outcome 정의 개선이지, **진입 알파 증명은 아님** — 1주 outcome으로 **카드 N** 여부를 결정.  
+4. **가장 ROI 높은 코드 후속**은 **KST 일원화(R1~R2)** → **calibration(N)** → **페이퍼(D)** → **재학습(m)** 순.  
+5. **평상시 시그널 0~2건/일**은 정상; funnel로 병목(모멘텀 vs ML vs 분봉)만 주간 추적.
+
+---
+
+*본 섹션은 Cursor 4차 검토. `CLAUDE.md` / `CURSOR.md` / `OPERATION_WEEK1.md` 미수정.*

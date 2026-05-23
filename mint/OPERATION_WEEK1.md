@@ -117,12 +117,10 @@ MINT_MAX_RISK_SCORE:    '45'
 - **재현**: `python -X utf8 -c "import sys; sys.path.insert(0,'mint'); from data.market_index import fetch_summary; print(fetch_summary())"`
 - **다음 세션 작업량**: 1~2h
 
-### P2 — UTC vs KST dedup 키 잠재 이슈
-- **증상**: 5/21 KST 23~00시 사이에 daily-summary GHA 실행 시 dedup 키가 UTC date 기준이라 발생
-- **위치**: [notifier/__init__.py](notifier/__init__.py) `maybe_send_daily_summary` `today = datetime.now().strftime("%Y-%m-%d")`
-- **영향**: 평일 cron(15:35 KST = 06:35 UTC) 정상 시각에서는 발생 안 함. 사용자가 manual trigger한 시각이 KST 자정 직후일 때만 dedup 키 mismatch.
-- **추정 원인**: `datetime.now()`가 UTC 기준. `config.tz.today_kst()` 사용 안 함.
-- **다음 세션 작업량**: 30분 (notifier `_load_state` 호출하는 모든 today 비교를 KST 일자로)
+### ~~P2 — UTC vs KST dedup 키 잠재 이슈~~ ✅ 2026-05-23 해결 (R1+R2, `8c43e1c`)
+- ~~증상~~: 5/21 KST 23~00시 사이에 daily-summary GHA 실행 시 dedup 키가 UTC date 기준이라 발생
+- **해결**: notifier의 4개 dedup 키 (`scan_stats_{today}`, `last_heartbeat_date`, `last_midday_date`, `last_summary_date`) 모두 `config.tz.today_kst()` 일원화. main.py:cmd_daily_summary와 rule_scanner:run_rule_scan의 today_start도 KST. maybe_send_midday_ping의 시각 비교는 `now_kst()`.
+- **잔여 (R7 후보)**: portfolio/db.py의 `datetime.now().isoformat()` (created_at 등 timestamp 저장) — KST 보장 안 됨. 비교 양 측이 같은 timezone이라 현재 동작은 OK이나 ad-hoc 쿼리 시 혼동 가능. 운영 데이터 누적 시 검토.
 
 ### P3 — Streamlit Cloud Build에 qlib 시도 흔적
 - **증상**: 처음 배포에서 plotly ModuleNotFoundError → mint/requirements.txt의 qlib 빌드 실패가 원인
@@ -140,13 +138,21 @@ MINT_MAX_RISK_SCORE:    '45'
 
 ## 🎯 1주 후 (5/29 ~ ) 의사결정 포인트
 
-### 우선순위 (사용자와 다음 세션에서 합의)
-1. **outcome 30건 이상 모이면 → 카드 m (재학습)**. 실 운영 분포로 모델 갱신. 가장 큰 도약 카드.
-2. **GHA 안정 확인 → Step 8 (Windows 작업 스케줄러 Disable)**. PC OFF 가능.
-3. **이슈 P1~P3 처리**. 우선순위 P1(지수 표시) > P3(qlib 청소) > P2(UTC dedup)
-4. **카드 C 시작 — 시장 regime/섹터 독립 신호**. AUC 0.582 → 0.6+ 도약 시도.
-5. **카드 D — 페이퍼 트레이딩 인프라**. 실제 가상 win rate.
-6. **NASDAQ 야간 활성화** — `.github/workflows/scan-us.yml` cron 주석 해제 후 push. (사용자 NASDAQ 운영 의향이면)
+### 우선순위 (Cursor 4차 검토 권고 반영, 2026-05-23)
+**Cursor 권고 순서: P2(해결됨) → 카드 N(dynamic exit calibration) → 카드 D(페이퍼) → 카드 m(재학습)**
+
+1. ✅ **P2 (UTC vs KST dedup)** 해결 (5/23 R1+R2)
+2. **카드 N — Dynamic Exit calibration (Cursor 권고 1순위)**. 현재 multiplier(1.5/0.7/1.5 등)는 임의 휴리스틱 — outcome 데이터로 fit. 데이터 누적 후 진입.
+3. **카드 D — 페이퍼 트레이딩 인프라**. 가상 매수 → 가상 outcome. 실 카카오페이와 별개로 알고리즘 평가용. 카드 N과 결합 시너지.
+4. **카드 m — 재학습** (regime feature + dynamic exit outcome 라벨로). 가장 큰 도약 카드. outcome 30건+ 누적 후.
+5. **Step 8 — Windows 작업 스케줄러 Disable** (GHA 안정 확인 후).
+6. **카드 C 보강** — 외국인/기관 수급, 섹터, VKOSPI. market_regime 정밀도 ↑.
+7. **NASDAQ 야간 활성화** — scan-us.yml cron 주석 해제. 사용자 결정 시.
+
+### Cursor 4차 정직성 메모 (다음 세션 인지 필수)
+- **AUC 0.582 / precision 0.79는 분봉·dedup·dynamic exit 적용 전 val 수치**. live 승률로 그대로 인용하면 과장.
+- **ML은 "고정 +3.5%/-2%/24h exit에 이길 확률"을 학습**, 실전은 dynamic exit. 라벨 불일치 = 카드 m 재학습 동기.
+- **hold 6~72h 적용해도 일봉 outcome 평가는 사실상 24h** (horizon_h // 24). 카톡·DB는 dynamic, 평가는 일봉 first-hit. 분봉 outcome 인프라 미구축.
 
 ---
 

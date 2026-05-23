@@ -220,11 +220,15 @@ def cmd_daily_summary():
     from datetime import datetime, timedelta
     from sqlalchemy import text
     from portfolio.db import get_conn
+    from config.tz import today_kst
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    # KST 기준 today (R1) — GHA UTC에서 KST 일자와 정합
+    today = today_kst()
     start = f"{today}T00:00:00"
-    end = (datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-           + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
+    # end는 다음 날 00:00 — KST 기준
+    from datetime import datetime as _dt
+    today_d = _dt.fromisoformat(today)
+    end = (today_d + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
 
     with get_conn() as conn:
         buy_today = conn.execute(

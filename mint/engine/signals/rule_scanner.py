@@ -231,7 +231,9 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
     # 오늘 이미 발생한 BUY 카운트 → max_daily_buys 한도
     from datetime import datetime as _dt
     from sqlalchemy import text as _text
-    today_start = _dt.now().strftime("%Y-%m-%d") + "T00:00:00"
+    # KST 기준 today_start (R1) — GHA UTC에서도 한국 거래일과 정합
+    from config.tz import today_kst
+    today_start = today_kst() + "T00:00:00"
     with db.get_conn() as conn:
         today_count = conn.execute(
             _text("SELECT COUNT(*) FROM signals WHERE signal_type='BUY' AND created_at >= :start"),

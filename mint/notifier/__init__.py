@@ -278,7 +278,9 @@ def accumulate_scan_stats(stats: dict) -> None:
     locked = _state_lock()
     try:
         state = _load_state()
-        today = datetime.now().strftime("%Y-%m-%d")
+        # KST 기준 today — GHA UTC에서도 한국 거래일과 정합 (R1, 2026-05-23)
+        from config.tz import today_kst
+        today = today_kst()
         key = f"scan_stats_{today}"
         cur = state.get(key, {})
         for k, v in stats.items():
@@ -293,7 +295,8 @@ def accumulate_scan_stats(stats: dict) -> None:
 
 def get_today_scan_stats() -> dict:
     state = _load_state()
-    today = datetime.now().strftime("%Y-%m-%d")
+    from config.tz import today_kst
+    today = today_kst()
     return state.get(f"scan_stats_{today}", {})
 
 
@@ -303,7 +306,9 @@ def maybe_send_midday_ping(markets: List[str]) -> bool:
     """
     if not _enabled():
         return False
-    now = datetime.now()
+    # KST 시각으로 점심시간 판정 (R1) — GHA UTC면 매번 새벽이라 11~13시 못 잡음
+    from config.tz import now_kst
+    now = now_kst()
     if not (11 <= now.hour <= 13):
         return False
     if now.hour == 13 and now.minute > 0:
@@ -361,7 +366,9 @@ def maybe_send_heartbeat(markets: List[str]) -> bool:
     """오늘 처음 스캔이면 하트비트 1통. 이미 보냈으면 skip."""
     if not _enabled():
         return False
-    today = datetime.now().strftime("%Y-%m-%d")
+    # KST 기준 today (R1)
+    from config.tz import today_kst, now_kst
+    today = today_kst()
     state = _load_state()
     if state.get("last_heartbeat_date") == today:
         return False
@@ -373,7 +380,7 @@ def maybe_send_heartbeat(markets: List[str]) -> bool:
     except Exception:
         market_line = None
 
-    now = datetime.now().strftime("%H:%M")
+    now = now_kst().strftime("%H:%M")
     lines = [
         f"🟢 Mint 시작 — {today} {now}",
         f"대상: {', '.join(markets)}",
@@ -406,7 +413,9 @@ def send_daily_summary(
     """장 마감 후 1통. 매도 권고가 있어도 보냄(요약 성격)."""
     if not _enabled():
         return False
-    today = datetime.now().strftime("%Y-%m-%d")
+    # KST 기준 today (R1) — GHA UTC가 KST 자정 직후일 때 같은 KST 날짜 정합
+    from config.tz import today_kst
+    today = today_kst()
     state = _load_state()
     if state.get("last_summary_date") == today:
         log.info("Daily summary already sent for %s — skipping", today)
