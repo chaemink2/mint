@@ -136,6 +136,18 @@ MINT_MAX_RISK_SCORE:    '45'
 
 ---
 
+## 🌎 NASDAQ 확장 (별도 작업)
+
+별도 Claude Code Chat 세션에서 진행. 단일 출처: **`mint/HANDOFF_NASDAQ.md`**.
+- Stage 1 인프라 (워치리스트 동적화, regime/dynamic exit/outcome NASDAQ 분기) 4~6h
+- Stage 2 ML 학습 (NASDAQ 전용 모델) 6~10h
+- Stage 3 백테스트 + 1주 시범 운영
+- 진행 전 사용자 합의 4가지 (ML 전략 / 분봉 / 진입 시점 / 운영 의향) — 별도 세션이 받음
+
+KR 운영은 무영향. NASDAQ 변경 시 KR 모델/스키마/workflow 보호 (HANDOFF_NASDAQ.md "변경 시 주의사항" 참조).
+
+---
+
 ## 🎯 1주 후 (5/29 ~ ) 의사결정 포인트
 
 ### 우선순위 (Cursor 4차 검토 권고 반영, 2026-05-23)

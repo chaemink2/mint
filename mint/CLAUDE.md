@@ -2,7 +2,7 @@
 
 > **마지막 업데이트**: 2026-05-22 (Cloud Migration 코드+배포 완료. 5/22~28 GHA 1주 자동 운영 검증 중.)
 > **다음 세션 픽업 시**: `mint/OPERATION_WEEK1.md` **최우선** + 아래 [🔁 다음 세션 픽업 가이드](#-다음-세션-픽업-가이드)
-> **Cursor 변경 이력**: `CURSOR.md` · **Cursor 검토 결과**: `REVIEW_CURSOR.md` · **Cloud 이전 가이드**: `CLOUD_MIGRATION.md` · **사용자 액션 가이드**: `CLOUD_MIGRATION_USER_GUIDE.md` · **1주 운영 플레이북**: `OPERATION_WEEK1.md`
+> **Cursor 변경 이력**: `CURSOR.md` · **Cursor 검토 결과**: `REVIEW_CURSOR.md` · **Cloud 이전 가이드**: `CLOUD_MIGRATION.md` · **사용자 액션 가이드**: `CLOUD_MIGRATION_USER_GUIDE.md` · **1주 운영 플레이북**: `OPERATION_WEEK1.md` · **NASDAQ 확장 인수인계**: `HANDOFF_NASDAQ.md` (별도 세션)
 
 ---
 
