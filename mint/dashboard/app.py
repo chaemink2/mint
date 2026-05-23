@@ -354,7 +354,7 @@ elif page == "🎯 추천 시그널":
 
     signals = db.get_active_signals()
     if not signals:
-        st.warning("활성 시그널 없음. 사이드바에서 「지금 스캔」을 실행하세요.")
+        st.info("현재 유효한 활성 시그널 없음. 아래 「오늘의 시그널 이력」에서 만료된 시그널 확인 가능.")
     else:
         for s in signals:
             tag = f"tag-{s['market'].lower()}"
@@ -411,6 +411,94 @@ elif page == "🎯 추천 시그널":
                             st.rerun()
                         except Exception as e:
                             st.error(str(e))
+
+    # ── 오늘의 시그널 이력 (만료 포함, 2026-05-24 추가) ──────
+    st.markdown("---")
+    st.markdown("### 📜 오늘의 시그널 이력")
+    st.caption(
+        "오늘 발생한 모든 시그널 — 만료(expired)·체결(acted) 포함. "
+        "유효시간(30분) 지나면 자동 expired. 발급 시점의 target/stop/hold/regime/모델 점수 보존."
+    )
+
+    from config.tz import today_kst
+    _today = today_kst()
+    _since = f"{_today}T00:00:00"
+    today_signals = db.get_signals_since(_since)
+
+    if not today_signals:
+        st.info(f"오늘({_today}) 발생한 시그널 없음. funnel(대시보드)에 카운트가 있는데 이력이 없다면 다른 GHA scan에서 dedup 처리됐을 수 있음.")
+    else:
+        st.write(f"**{_today}** — 총 **{len(today_signals)}건**")
+        for s in today_signals:
+            status = s.get("status", "?")
+            tag = f"tag-{s['market'].lower()}"
+            ref = s.get("ref_price") or 0
+            tgt = s.get("target_price") or 0
+            stp = s.get("stop_price") or 0
+            hold_h = s.get("max_hold_hours") or 24
+            regime = s.get("regime_label") or "—"
+            exp_pct = (s.get("expected_return") or 0) * 100
+            conf_pct = (s.get("confidence") or 0) * 100
+            ml_pct = (s.get("model_score") or 0) * 100
+            target_pct = ((tgt / ref - 1) * 100) if (ref and tgt) else 0
+            stop_pct = ((stp / ref - 1) * 100) if (ref and stp) else 0
+            created = (s.get("created_at") or "")[:19].replace("T", " ")
+            expiry_reason = s.get("expiry_reason") or ""
+
+            # status별 아이콘/색
+            if status == "active":
+                status_badge = "🟢 active"
+                bg = "rgba(63, 185, 80, 0.08)"
+            elif status == "acted":
+                status_badge = "📦 acted"
+                bg = "rgba(31, 119, 200, 0.08)"
+            elif status == "expired":
+                reason_label = {"TIME": "시간만료", "TARGET_HIT": "목표가 도달", "STOP_HIT": "손절가 터치"}.get(
+                    expiry_reason, expiry_reason or "만료"
+                )
+                status_badge = f"⏱ expired ({reason_label})"
+                bg = "rgba(160, 160, 160, 0.08)"
+            else:
+                status_badge = status
+                bg = "rgba(160, 160, 160, 0.08)"
+
+            currency = "$" if s["market"] == "NASDAQ" else "₩"
+            st.markdown(
+                f"""
+            <div style="background:{bg}; padding:10px 14px; border-radius:8px; margin-bottom:8px;">
+                <span class="{tag}">{s['market']}</span>
+                <strong>{s.get('name') or s['ticker']}</strong>
+                <code>{s['ticker']}</code>
+                · #{s['id']} · {status_badge}
+                <br>
+                🎯 <strong>{currency}{tgt:,.0f} ({target_pct:+.2f}%)</strong>
+                / 손절 {currency}{stp:,.0f} ({stop_pct:+.2f}%)
+                · ⏱ {hold_h:.0f}h
+                · 시장 <em>{regime}</em>
+                <br>
+                기준가 {currency}{ref:,.0f}
+                · 모멘텀 {exp_pct:+.1f}%
+                · ML {ml_pct:.0f}% (전체 conf {conf_pct:.0f}%)
+                · 발생 <em>{created}</em>
+            </div>
+            """,
+                unsafe_allow_html=True,
+            )
+
+    # 어제~7일 누적 (요약)
+    with st.expander("📊 최근 7일 시그널 이력 (요약)"):
+        from datetime import datetime, timedelta
+        _week_since = (datetime.now() - timedelta(days=7)).isoformat()
+        week_signals = db.get_signals_since(_week_since, limit=300)
+        if not week_signals:
+            st.write("최근 7일 시그널 없음")
+        else:
+            import pandas as pd
+            wdf = pd.DataFrame(week_signals)
+            wdf["일자"] = wdf["created_at"].str[:10]
+            summary = wdf.groupby(["일자", "status"]).size().unstack(fill_value=0).reset_index()
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+            st.caption(f"총 {len(week_signals)}건 · 종목 유일 {wdf['ticker'].nunique()}개")
 
 
 # ══════════════════════════════════════════════════════════

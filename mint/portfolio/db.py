@@ -311,6 +311,20 @@ def get_active_signals(limit: int = 50) -> List[Dict]:
         return _rows_to_dicts(rows)
 
 
+def get_signals_since(since_iso: str, limit: int = 200) -> List[Dict]:
+    """status 무관 — 시그널 history 조회. created_at >= since_iso.
+    대시보드 '오늘의 시그널 이력' 같은 데서 사용.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            text("""SELECT * FROM signals
+               WHERE signal_type = 'BUY' AND created_at >= :since
+               ORDER BY created_at DESC LIMIT :lim"""),
+            {"since": since_iso, "lim": limit},
+        ).fetchall()
+        return _rows_to_dicts(rows)
+
+
 def get_signal(signal_id: int) -> Optional[Dict]:
     with get_conn() as conn:
         row = conn.execute(
