@@ -643,3 +643,138 @@ read-modify-write without file lock. Windows 스케줄러 **「새 인스턴스 
 ---
 
 *본 섹션은 Cursor 3차 검토. `CLAUDE.md` / `CURSOR.md` 미수정.*
+
+---
+
+# 📨 Cursor 4차 검토 요청 (2026-05-23)
+
+## 배경 (Claude가 정리)
+
+3차 검토(5/21) 이후 사용자가 다음을 일괄 결정·진행:
+
+1. **5/21 진단 픽스** (`aaae6e7`)
+   - TZ 비교 버그 (`_evaluate_single_outcome`에서 KST tz-aware vs naive 비교 실패)
+   - Universe 정적 폴백 (MINT_WATCHLIST_SIZE 미설정 → static 20종목으로 운영 중. 200종목 모델과 mismatch)
+   - Risk 게이트 30→45 (실 데이터 모멘텀 통과 종목 risk 평균 41.4. 사용자 결정 사안 변경)
+
+2. **Cloud Migration 코드 + 배포** (`b7afcc1`, `4fb61ec`, `465731d`, `5fab66d`, `649c4cd`)
+   - Phase 1: SQLAlchemy 추상화 (sqlite/postgres 양쪽 호환). DATABASE_URL env, RETURNING id, dialect 분기
+   - Phase 2: auth_tokens + app_state 테이블. kakao/kis 토큰 + notifier state 파일→DB 자동 마이그레이션 (1회)
+   - Phase 4: GHA workflow 4개 (scan-kr/scan-us/daily-summary/outcomes). mint_lgbm.joblib repo commit. main.py에 scan-us 명령 추가
+   - GHA용 requirements-runtime.txt + Streamlit용 dashboard/requirements.txt 분리 (qlib/torch 제외 — 그게 cold-start 빌드 실패 원인이었음)
+   - Neon Postgres + GHA cron + Streamlit Cloud (https://chaemink2-mint.streamlit.app) 운영 시작
+
+3. **지수 추종 + Dynamic Exit** (`c55e8e8`) — 사용자 비전 paradigm shift
+   - 사용자 5/22 발언: "mint의 진짜 목표는 최단시간 내 최대 수익. +3%/-2%/24h는 baseline 예시. 종목별·시장별 동적 적용 필요."
+   - **ML 모델은 그대로** (binary classifier, AUC 0.582). post-processing layer만 동적.
+   - `engine/market_regime.py` 신규 — KOSPI/KOSDAQ 시장별 5단계 regime (yfinance ^KS11/^KQ11)
+   - `engine/dynamic_exit.py` 신규 — 종목 ATR × regime multiplier → target/stop/hold
+   - signals/positions 테이블 max_hold_hours/regime_label 컬럼 추가
+   - 카톡 시그널/heartbeat/midday/daily_summary + 대시보드 4곳에 regime 표시
+
+## 사용자 핵심 질문
+
+> **"5/22~23 양일 변경 다발(8 commit, +1300 lines)이 안전한가? 1주 운영 시작 전 마지막 점검."**
+
+## 부탁드릴 검토
+
+### A. SQLAlchemy 리팩터 회귀 안정성 (commit b7afcc1)
+- `portfolio/db.py` 654→830 lines. 모든 SQL을 `text()` + named param + `RETURNING id`로 변환
+- `_evaluate_single_outcome`은 `to_kst()` 통일 + 시그널별 max_hold_hours 사용
+- 검토 포인트:
+  1. `_existing_columns()` PRAGMA(sqlite) vs information_schema(postgres) 분기 정확한가
+  2. SQLite FK 활성화 이벤트(`PRAGMA foreign_keys=ON`)의 안정성
+  3. `_id_pk()` AUTOINCREMENT vs BIGSERIAL — 마이그레이션 후 기존 sqlite 데이터 호환 문제 없나
+  4. `mark_expiry_notified`의 `bindparam(expanding=True)` — postgres에서 정상 동작 확인됐는지 (현재 로컬은 sqlite만 검증)
+  5. `ON CONFLICT(service) DO UPDATE` UPSERT — sqlite 3.35+ / postgres 9.5+ 호환만 가정. Python 3.13 sqlite는 더 최신이라 OK이지만 GHA ubuntu Python sqlite 버전 확인 필요
+
+### B. Phase 2 토큰/상태 영속화 (kakao/kis/notifier)
+- 파일 → DB 1회 자동 마이그레이션 패턴
+- sqlite 운영 시 파일도 동시 보존 (`if DATABASE_URL.startswith("sqlite")`)
+- 검토 포인트:
+  1. **순환 import 위험**: notifier/kakao.py가 portfolio.db import — kakao 모듈은 다른 곳에서도 import되는데 init 시점 충돌 가능성
+  2. **GHA 휘발 환경에서 첫 호출**: Neon에 토큰 없으면 `_load_tokens` → file fallback → file 없음 → None. 그때 발송 attempt가 어떻게 처리되는지
+  3. **race condition**: 동시 2개 GHA가 토큰 refresh 시도하면 (예: scan-kr + daily-summary가 같은 5분 안에) — UPSERT는 atomic이지만 refresh API 호출 자체는 중복 호출. KIS는 토큰 발급 한도 있음
+
+### C. GHA workflow 안전성 (commit 4fb61ec, 465731d)
+- 4개 workflow + 인라인 env (`MINT_USE_ML_CONFIDENCE=true` 등 6개)
+- `concurrency: { group: mint-kr-scan, cancel-in-progress: false }`
+- 검토 포인트:
+  1. **secrets 노출 위험**: workflow 로그가 자동 마스킹되나 — 특히 KIS_APP_SECRET이 stderr 출력에 섞일 가능성
+  2. **timeout-minutes 10**: KR scan은 200종목 pykrx fetch — pip cache miss 시 30s + scan 5~9분 = OK. 다만 첫 콜드런 4~6분 추가 가능성 — timeout=15 권장?
+  3. **cron 시각 KST 9:00~15:50**: UTC `*/10 0-6 * * 1-5` — 정확한가? (06:00 UTC = 15:00 KST, `0-6` 범위가 UTC 06:50까지 = KST 15:50)
+  4. **daily-summary 시각**: `35 6 * * 1-5` UTC = 15:35 KST. KR 장 마감 직후 적절
+  5. **outcomes 시각**: `30 14 * * 1-5` UTC = 23:30 KST. 24h 지난 5/19 LOSS 같은 외래 데이터는 이미 평가됐고, 신규 시그널 24h 이후 평가만 의미
+
+### D. Dynamic Exit 휴리스틱 합리성 (commit c55e8e8) — 🔥 가장 중요
+**`engine/dynamic_exit.py`의 multiplier 값들은 사용자 결정 사안. 임의 휴리스틱이라 백테스트 없음.**
+
+| Regime | target × | stop × | hold × |
+|---|---|---|---|
+| STRONG_BULL | 1.5 | 0.7 | 1.5 |
+| BULL | 1.2 | 0.85 | 1.25 |
+| SIDEWAYS | 1.0 | 1.0 | 1.0 |
+| BEAR | 0.75 | 0.9 | 0.75 |
+| STRONG_BEAR | 0.5 | 0.85 | 0.5 |
+
+- baseline: target = ATR×1.5, stop = -ATR×1.0, hold = 24h
+- cap: target [1.5%, 15%], stop abs [0.5%, 5%], hold [6h, 72h]
+- 검토 포인트:
+  1. **ATR 기반 target/stop의 정합성** — 변동 큰 종목엔 큰 target. 그러나 ATR 큰 종목은 본질적으로 노이즈 큰 종목이라 false positive ↑ 가능. ATR×1.5 multiplier가 적정한가? (백테스트 없음)
+  2. **regime multiplier 비대칭** — STRONG_BULL의 stop ×0.7 (좁힘)은 강세장의 의도된 lower drawdown 허용. 다만 강세장에선 작은 stop으로 false stop이 잦을 수 있음. 데이터로 검증 필요
+  3. **hold 6~72h 범위** — 6h hold는 일봉 outcome 평가에 정확도 한계 (분봉 fetch 인프라 미구축). `_evaluate_single_outcome`은 일봉 first-hit이라 6h hold도 24h 일봉 1개로 평가됨 — 사실상 hold=24h와 동일 평가. 이게 문제인가?
+  4. **종목 ATR 사용처와 risk 게이트 mismatch** — risk_score = ATR_pct × 500 (cap 100). dynamic_exit는 `atr_pct = risk / 500.0` 역산. 이게 정확한가? risk가 100에 캡되면 atr_pct도 0.2 캡 — 그런 큰 변동 종목은 사실상 dynamic_exit cap에 다 묶임
+  5. **NASDAQ 미적용**: us_client 종목엔 regime 없고 dynamic_exit 안 됨. 일관성 깨짐 (현재 NASDAQ scan은 비활성이라 영향 작음)
+
+### E. Market Regime 분류 임계값 (engine/market_regime.py)
+- composite_score = ret_5d × 0.5 + ret_20d × 0.3 + ma20_dist × 0.2
+- 카테고리 cut: ±0.04 (STRONG), ±0.01 (BULL/BEAR), 그 사이 SIDEWAYS
+- 검토 포인트:
+  1. **ret_5d 가중치 0.5**: 사용자 직관 "최근 분위기" 반영. 그러나 ret_5d는 단기 noise도 큼 — 한 큰 갭이 regime 잘못 판단할 가능성
+  2. **STRONG_BULL 임계값 +0.04**: 5/22 KOSPI가 5d +4.7%로 STRONG_BULL 분류. 한국 시장에서 +4.7%가 STRONG_BULL이 맞는 강도인가
+  3. **yfinance fetch 실패 시**: SIDEWAYS 폴백 — 안전 default이나, 만약 장기간 yfinance 장애 시 dynamic_exit가 항상 SIDEWAYS multiplier(1.0/1.0/1.0)로 동작. 즉 baseline ATR×1.5 target만 적용. 보수적이라 무해
+  4. **KOSPI vs KOSDAQ regime 독립** — 사용자 결정. 다만 KOSPI/KOSDAQ 상관 0.7+ 라 별도 분류의 실익은 작을 수 있음
+  5. **VKOSPI 등 변동성 지표 미반영**: regime이 오로지 가격 기반. 향후 카드
+
+### F. 카톡 메시지 200자 안전성 (P3 재발 위험)
+시그널 메시지에 dynamic + regime 줄 추가 → 길이 ↑
+```
+🟢 [Mint 매수] 🇰🇷 삼성전자 (005930)
+기준가 72,500원
+🎯 76,578 (+5.6%) / 손절 71,231 (-1.7%)
+⏱ 36h내 권고 · 유효 30분
+시장 🟢🟢 KOSPI 강한 상승
+⚠️ 현재 72,820원 (+0.44% · 이미 상승, 엔트리 늦음)
+🔥 5분봉 패턴 동시 통과
+모멘텀 +4.5% · ML 확률 73%
+```
+- 총 8줄 — 한글 + 이모지 비율 높아 200자 위험
+- 검토 포인트:
+  1. truncate 로직 (라인 단위 아래쪽부터)이 핵심 정보 보존하는가
+  2. 200자 안전한지 실측 — 위 예시 길이 측정 부탁
+  3. 어떤 줄을 합치거나 줄일 수 있나
+
+### G. Streamlit Cloud 보안/안정성
+- `chaemink2/mint` repo public 전환 (Streamlit 무료 plan 호환)
+- DATABASE_URL은 Streamlit secrets에만 (코드 X)
+- mint_lgbm.joblib (138KB) repo commit
+- 검토 포인트:
+  1. **public repo에 commit된 것 중 secret 노출 흔적**: git log 전체 grep 권장 — REST_API_KEY/APP_SECRET/access_token/refresh_token/postgresql://
+  2. **mint_lgbm.joblib commit**: 모델 자체는 학습된 weights — 무해. 다만 학습 데이터 정보는 누설 안 됨
+  3. **Streamlit Cloud secrets TOML**: 로그에 마스킹되나 — 에러 발생 시 traceback에 노출 가능성
+
+### H. 다음 카드 우선순위 (사용자 결정 보조용)
+1주 운영 데이터(outcome 0~10건 추정) 후 다음 작업으로 어느 것이 ROI 최고일지 의견:
+- **카드 m** (재학습): regime feature 추가 + dynamic exit outcome으로 회귀 모델 시도. 가장 큰 도약 가능성 + 가장 큰 리스크
+- **카드 C**: 추가 regime feature (외국인/기관 수급, 섹터 강도, VKOSPI). market_regime 보강
+- **카드 D**: 페이퍼 트레이딩 (가상 매수 → 가상 outcome). 실 카카오페이 수동 매매와 별개로 알고리즘 평가용
+- **P1~P4** (OPERATION_WEEK1.md): 지수 표시 오류 (사실 시뮬레이션 환경이라 false alarm 가능), UTC vs KST dedup, mint/requirements.txt qlib 청소, funnel passed_risk 패턴
+- **카드 N**: dynamic_exit 휴리스틱의 데이터 기반 calibration (현재 임의 multiplier 값을 outcome 데이터로 fit)
+
+## 검토 결과 출력
+`mint/REVIEW_CURSOR.md` 끝에 `# 📨 Cursor 4차 검토 (2026-05-XX)` 섹션으로 append.
+승인된 사항만 다음 라운드에 코드 반영. CLAUDE.md / CURSOR.md / OPERATION_WEEK1.md는 직접 수정 자제.
+
+---
+
+*5/23 4차 검토 요청. 코드 변경 없음.*
