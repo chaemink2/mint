@@ -91,7 +91,7 @@ def evaluate_position(position: dict, current_price: Optional[float] = None) -> 
         # 손절은 advisory: 강제 매도가 아닌 "고려" 단계로 표시
         action = "CONSIDER_SELL" if config.ops.stop_loss_is_advisory else "SELL_NOW"
         reason = "STOP_LOSS"
-    elif hold_hours >= config.signal.max_hold_hours:
+    elif hold_hours >= float(position.get("max_hold_hours") or config.signal.max_hold_hours):
         action, reason = "CONSIDER_SELL", "TIME"
     else:
         action, reason = "HOLD", "HOLD"

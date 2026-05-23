@@ -29,6 +29,24 @@ MINT_WATCHLIST_SIZE:    '200'
 MINT_MAX_RISK_SCORE:    '45'
 ```
 
+### 🆕 2026-05-22 추가: 지수 추종 + Dynamic Exit
+**ML 모델은 그대로** (binary "24h +3% 도달 여부" 분류). 시그널 통과 후 post-processing layer 2개 추가:
+
+- **engine/market_regime.py** — KOSPI/KOSDAQ 시장별 regime 5단계 (STRONG_BULL/BULL/SIDEWAYS/BEAR/STRONG_BEAR). yfinance ^KS11/^KQ11 일봉 + 5d/20d/MA20 종합 score. 60s 캐시.
+- **engine/dynamic_exit.py** — 종목 ATR + 시장 regime → target/stop/hold 동적 계산.
+  - base target = ATR × 1.5, base stop = -ATR × 1.0, base hold = 24h
+  - regime multiplier (target/stop/hold):
+    - STRONG_BULL: ×1.5 / ×0.7 / ×1.5 (길게 잡고 작은 stop)
+    - BULL: ×1.2 / ×0.85 / ×1.25
+    - SIDEWAYS: ×1.0 / ×1.0 / ×1.0
+    - BEAR: ×0.75 / ×0.9 / ×0.75
+    - STRONG_BEAR: ×0.5 / ×0.85 / ×0.5
+  - cap: target 1.5~15% / stop 0.5~5% / hold **6~72h** (사용자 결정)
+- DB 마이그레이션: signals/positions 각각 `max_hold_hours REAL` + `regime_label TEXT` 컬럼
+- log_signal·open_position_from_signal·_evaluate_single_outcome·exit_strategy 모두 시그널별 max_hold 사용
+- 카톡 시그널/미드데이/하트비트/일일요약 + 대시보드에 regime 표시
+- NASDAQ은 미적용 (기존 고정값 사용 — yfinance regime은 KOSPI/KOSDAQ만)
+
 ### 모델
 - 5/19c 학습 (`mint/data/models/mint_lgbm.joblib`, 138KB, repo commit)
 - 200종목 × 730일 LightGBM, AUC 0.582

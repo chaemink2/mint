@@ -104,9 +104,27 @@ def _format_buy_signal(sig: dict) -> str:
     target = sig.get("target_price") or 0
     stop = sig.get("stop_price") or 0
 
-    target_ret = config.signal.target_return * 100
-    stop_ret = config.signal.stop_loss * 100
-    hold_h = config.signal.max_hold_hours
+    # 2026-05-22 Dynamic exit — 시그널별 target/stop/hold가 있으면 그걸 사용
+    if sig.get("max_hold_hours") and ref > 0 and target > 0 and stop > 0:
+        target_ret = (target / ref - 1) * 100
+        stop_ret = (stop / ref - 1) * 100
+        hold_h = float(sig["max_hold_hours"])
+    else:
+        target_ret = config.signal.target_return * 100
+        stop_ret = config.signal.stop_loss * 100
+        hold_h = config.signal.max_hold_hours
+
+    # Regime 표시
+    regime_label = sig.get("regime_label")
+    regime_line = ""
+    if regime_label:
+        try:
+            from engine.market_regime import REGIME_EMOJI, REGIME_KO
+            emoji_r = REGIME_EMOJI.get(regime_label, "")
+            ko_r = REGIME_KO.get(regime_label, regime_label)
+            regime_line = f"시장 {emoji_r} {market} {ko_r}"
+        except Exception:
+            pass
 
     conf_label = "ML 확률" if config.signal.use_ml_confidence else "룰 점수"
     valid_min = config.ops.signal_valid_minutes
@@ -118,8 +136,9 @@ def _format_buy_signal(sig: dict) -> str:
     lines = [
         f"🟢 [Mint 매수] {_market_emoji(market)} {name} ({sig['ticker']})",
         f"기준가 {ref:,.0f}원",
-        f"목표 {target:,.0f} / 손절 {stop:,.0f}",
-        f"{hold_h}h내 +{target_ret:.1f}%/{stop_ret:+.1f}% 권고 · 유효 {valid_min}분",
+        f"🎯 {target:,.0f} ({target_ret:+.1f}%) / 손절 {stop:,.0f} ({stop_ret:+.1f}%)",
+        f"⏱ {hold_h:.0f}h내 권고 · 유효 {valid_min}분",
+        regime_line,
         fresh or "",
         minute_marker,
         f"모멘텀 {momentum_pct:+.1f}% · {conf_label} {confidence_pct:.0f}%",
@@ -311,6 +330,14 @@ def maybe_send_midday_ping(markets: List[str]) -> bool:
     ]
     if market_line:
         lines.append(market_line)
+    # 시장 regime (KOSPI/KOSDAQ 각각)
+    try:
+        from engine.market_regime import both_regimes_line
+        rl = both_regimes_line()
+        if rl and "조회 실패" not in rl:
+            lines.append(rl)
+    except Exception:
+        pass
     lines.append(f"오전 스캔 {scans}회 · 시그널 {signals}건")
     if signals == 0 and scans > 0:
         # 어디서 막혔는지 한 줄
@@ -353,6 +380,14 @@ def maybe_send_heartbeat(markets: List[str]) -> bool:
     ]
     if market_line:
         lines.append(market_line)
+    # 시장 regime
+    try:
+        from engine.market_regime import both_regimes_line
+        rl = both_regimes_line()
+        if rl and "조회 실패" not in rl:
+            lines.append(rl)
+    except Exception:
+        pass
     lines.append("새 시그널이 잡히면 이 채팅으로 알려드립니다.")
     ok = kakao.send_text("\n".join(lines))
     if ok:
@@ -384,6 +419,14 @@ def send_daily_summary(
         f"보유 포지션: {open_positions}건",
         f"매도 권고(HOLD 제외): {exit_actions}건",
     ]
+    # 시장 regime (KOSPI/KOSDAQ)
+    try:
+        from engine.market_regime import both_regimes_line
+        rl = both_regimes_line()
+        if rl and "조회 실패" not in rl:
+            lines.append(rl)
+    except Exception:
+        pass
     if extra_lines:
         lines.extend(extra_lines)
     ok = kakao.send_text("\n".join(lines))

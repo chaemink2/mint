@@ -219,6 +219,27 @@ if page == "📊 대시보드":
         else:
             col.metric(code, "—", "데이터 없음")
 
+    # 시장 regime (2026-05-22 추가)
+    try:
+        from engine.market_regime import get_regime
+        rc1, rc2 = st.columns(2)
+        for col, code in zip((rc1, rc2), ("KOSPI", "KOSDAQ")):
+            ri = get_regime(code)
+            if ri is not None:
+                col.metric(
+                    f"{ri.emoji()} {code} regime",
+                    ri.ko(),
+                    f"5d {ri.ret_5d*100:+.1f}% / 20d {ri.ret_20d*100:+.1f}%",
+                )
+            else:
+                col.metric(f"{code} regime", "—", "조회 실패")
+        st.caption(
+            "Regime은 dynamic exit(target/stop/holding)에 반영됨. "
+            "강세→길게 잡고 작은 stop / 약세→짧게 자르고 작은 target."
+        )
+    except Exception as e:
+        st.caption(f"Regime 모듈 미로드: {e}")
+
     st.markdown("---")
 
     # 오늘 스캔 funnel (카드 b 활용)

@@ -152,6 +152,11 @@ _MIGRATIONS = [
     ("signals", "outcome_max", "REAL"),
     ("signals", "outcome_min", "REAL"),
     ("signals", "outcome_evaluated_at", "TEXT"),
+    # 2026-05-22 Dynamic exit (시장 regime + ATR 기반 종목별 target/stop/hold)
+    ("signals", "max_hold_hours", "REAL"),
+    ("signals", "regime_label", "TEXT"),
+    ("positions", "max_hold_hours", "REAL"),
+    ("positions", "regime_label", "TEXT"),
     ("positions", "signal_id", "INTEGER"),
     ("positions", "remaining_qty", "INTEGER"),
     ("positions", "currency", "TEXT DEFAULT 'KRW'"),
@@ -258,16 +263,18 @@ def log_signal(
     valid_until: Optional[str] = None,
     target_price: Optional[float] = None,
     stop_price: Optional[float] = None,
+    max_hold_hours: Optional[float] = None,
+    regime_label: Optional[str] = None,
 ) -> int:
     with get_conn() as conn:
         result = conn.execute(
             text("""INSERT INTO signals
                (ticker, market, name, signal_type, confidence, expected_return,
                 risk_score, model_score, ref_price, target_price, stop_price,
-                status, valid_until, created_at)
+                status, valid_until, created_at, max_hold_hours, regime_label)
                VALUES (:ticker, :market, :name, :signal_type, :confidence, :expected_return,
                        :risk_score, :model_score, :ref_price, :target_price, :stop_price,
-                       :status, :valid_until, :created_at)
+                       :status, :valid_until, :created_at, :max_hold_hours, :regime_label)
                RETURNING id"""),
             {
                 "ticker": ticker,
@@ -284,6 +291,8 @@ def log_signal(
                 "status": "active",
                 "valid_until": valid_until,
                 "created_at": datetime.now().isoformat(),
+                "max_hold_hours": max_hold_hours,
+                "regime_label": regime_label,
             },
         )
         return int(result.scalar_one())
@@ -423,7 +432,8 @@ def _evaluate_single_outcome(sig: dict) -> Optional[dict]:
         return None
     # created_at은 tz-naive(과거 호환) 또는 tz-aware. 둘 다 KST로 통일 — bars["ts_local"]이 KST tz-aware이므로 비교 정합.
     created = to_kst(created)
-    horizon_h = _cfg.signal.max_hold_hours
+    # 시그널별 동적 max_hold_hours 우선, 없으면 config 기본값 (24h).
+    horizon_h = float(sig.get("max_hold_hours") or _cfg.signal.max_hold_hours)
     if now_kst() < created + _td(hours=horizon_h):
         return None
 
@@ -565,8 +575,19 @@ def open_position_from_signal(
         raise ValueError(f"Signal {signal_id} not found")
 
     # 시그널 ref_price가 아닌 실제 체결가 기준으로 익절/손절을 재계산.
-    target = buy_price * (1 + config.signal.target_return)
-    stop = buy_price * (1 + config.signal.stop_loss)
+    # Dynamic exit: 시그널이 가진 dynamic target/stop/hold가 있으면 그 비율을 체결가에 적용.
+    if sig.get("target_price") and sig.get("ref_price"):
+        target_ratio = float(sig["target_price"]) / float(sig["ref_price"]) - 1
+        target = buy_price * (1 + target_ratio)
+    else:
+        target = buy_price * (1 + config.signal.target_return)
+    if sig.get("stop_price") and sig.get("ref_price"):
+        stop_ratio = float(sig["stop_price"]) / float(sig["ref_price"]) - 1
+        stop = buy_price * (1 + stop_ratio)
+    else:
+        stop = buy_price * (1 + config.signal.stop_loss)
+    max_hold = sig.get("max_hold_hours") or float(config.signal.max_hold_hours)
+    regime = sig.get("regime_label")
     currency = "KRW" if sig["market"] in ("KOSPI", "KOSDAQ") else "USD"
     now = datetime.now().isoformat()
 
@@ -574,9 +595,11 @@ def open_position_from_signal(
         result = conn.execute(
             text("""INSERT INTO positions
                (signal_id, ticker, market, name, buy_price, quantity, remaining_qty,
-                buy_time, target_price, stop_loss, signal_conf, currency, source)
+                buy_time, target_price, stop_loss, signal_conf, currency, source,
+                max_hold_hours, regime_label)
                VALUES (:signal_id, :ticker, :market, :name, :buy_price, :quantity, :remaining,
-                       :buy_time, :target, :stop, :sigconf, :currency, :source)
+                       :buy_time, :target, :stop, :sigconf, :currency, :source,
+                       :max_hold, :regime)
                RETURNING id"""),
             {
                 "signal_id": signal_id,
@@ -592,6 +615,8 @@ def open_position_from_signal(
                 "sigconf": sig.get("confidence"),
                 "currency": currency,
                 "source": "manual",
+                "max_hold": max_hold,
+                "regime": regime,
             },
         )
         position_id = int(result.scalar_one())

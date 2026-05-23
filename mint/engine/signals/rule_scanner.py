@@ -166,8 +166,28 @@ def evaluate_ticker(
         if stats is not None:
             stats["passed_minute"] = stats.get("passed_minute", 0) + 1
 
-    target_price = ref_price * (1 + sig.target_return)
-    stop_price = ref_price * (1 + sig.stop_loss)
+    # 2026-05-22 Dynamic exit — 시장 regime + 종목 ATR 기반 target/stop/hold
+    # ML 모델은 binary classifier 그대로. target/stop/hold만 종목·상황별 동적.
+    atr_pct = (risk / 500.0) if risk > 0 else 0.02  # _risk_score = ATR_pct * 500
+    if market in ("KOSPI", "KOSDAQ"):
+        from engine.market_regime import get_regime_or_sideways
+        from engine.dynamic_exit import compute_dynamic_exit
+        _regime = get_regime_or_sideways(market)
+        _de = compute_dynamic_exit(atr_pct, market, regime=_regime)
+        target_price = ref_price * (1 + _de.target_pct)
+        stop_price = ref_price * (1 + _de.stop_pct)
+        max_hold_hours_val = _de.max_hold_hours
+        regime_label_val = _regime.label
+        dynamic_target_pct = _de.target_pct
+        dynamic_stop_pct = _de.stop_pct
+    else:
+        # NASDAQ 등 — regime/dynamic 미지원, 기존 고정값 유지
+        target_price = ref_price * (1 + sig.target_return)
+        stop_price = ref_price * (1 + sig.stop_loss)
+        max_hold_hours_val = float(sig.max_hold_hours)
+        regime_label_val = None
+        dynamic_target_pct = sig.target_return
+        dynamic_stop_pct = sig.stop_loss
 
     # 최종 confidence: ML 있으면 ML, 없으면 룰
     final_conf = ml_conf if ml_conf is not None else rule_conf
@@ -185,6 +205,10 @@ def evaluate_ticker(
         "target_price": target_price,
         "stop_price": stop_price,
         "volume_ratio": vol_ratio,
+        "max_hold_hours": max_hold_hours_val,
+        "regime_label": regime_label_val,
+        "dynamic_target_pct": dynamic_target_pct,
+        "dynamic_stop_pct": dynamic_stop_pct,
     }
     if minute_info:
         result.update(minute_info)
@@ -263,6 +287,8 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
             valid_until=valid_until,
             target_price=candidate["target_price"],
             stop_price=candidate["stop_price"],
+            max_hold_hours=candidate.get("max_hold_hours"),
+            regime_label=candidate.get("regime_label"),
         )
         new_ids.append(sid)
         stats["signals_created"] += 1

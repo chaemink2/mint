@@ -9,7 +9,7 @@ psycopg2-binary>=2.9
 # 데이터 fetch (KR + 종목명 + 일봉)
 pykrx>=1.0.47
 requests>=2.31.0
-yfinance>=0.2.38            # NASDAQ scan-us — KR scan에서도 us_client import 시 필요
+yfinance>=0.2.38            # NASDAQ scan-us + KOSPI/KOSDAQ regime (^KS11/^KQ11)
 
 # 분석/ML 추론
 pandas>=2.0.0

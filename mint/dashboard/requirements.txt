@@ -11,10 +11,10 @@ sqlalchemy>=2.0
 psycopg2-binary>=2.9
 python-dotenv>=1.0.0
 
-# 데이터 (시장 지수, KRX 일봉, NASDAQ)
+# 데이터 (시장 지수, KRX 일봉, NASDAQ + KOSPI/KOSDAQ regime)
 requests>=2.31.0
 pykrx>=1.0.47
-yfinance>=0.2.38
+yfinance>=0.2.38            # KOSPI/KOSDAQ regime용 ^KS11/^KQ11 지수 fetch
 
 # 분석/추론 (모델 분석 페이지에서 booster 로드, features 계산)
 pandas>=2.0.0
