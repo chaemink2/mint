@@ -2,15 +2,24 @@
 동적 워치리스트 — 시총 상위 N종목 추출.
 
 데이터 소스 우선순위:
-  1. KRX_ID/KRX_PW 환경변수 있으면 pykrx (인증 경로)
-  2. Naver Finance HTML 스크래핑 (시가총액 랭킹 페이지, 인증 불필요)
-  3. config.markets.py의 정적 리스트 폴백
+  KR (KOSPI/KOSDAQ):
+    1. KRX_ID/KRX_PW 환경변수 있으면 pykrx (인증 경로)
+    2. Naver Finance HTML 스크래핑 (시가총액 랭킹 페이지, 인증 불필요)
+    3. config.markets.py의 정적 리스트 폴백
+
+  NASDAQ:
+    1. Wikipedia NASDAQ-100 스크래핑 (인증 불필요, 100종목 cap)
+    2. config.markets.py의 NASDAQ_WATCHLIST 정적 폴백
 
 캐시 위치: mint/data/.universe_cache.json (24h TTL)
 
 배경:
   2026-05경 pykrx 1.2.8부터 data.krx.co.kr 로그인이 필수가 됨.
   KRX_ID/KRX_PW 없으면 시총 랭킹 API 실패 → Naver를 1차 소스로 사용.
+
+  NASDAQ은 yfinance Ticker.info 호출이 종목당 1~2초 (200 종목 = 5분+) →
+  GHA 부담. Wikipedia NASDAQ-100 페이지 시드 그대로 사용 (시총 가중치
+  기준 자체가 NASDAQ-100 indexing → 사실상 시총 상위 100).
 """
 from __future__ import annotations
 
@@ -137,6 +146,100 @@ def _fetch_top_n_kr(market: str, n: int) -> List[str]:
     return tickers
 
 
+_NASDAQ100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
+
+
+def _fetch_top_n_nasdaq_wikipedia(n: int) -> List[str]:
+    """Wikipedia NASDAQ-100 페이지에서 ticker 추출.
+
+    페이지 표 구조: <td><a href="/wiki/...">SYMBOL</a></td><td>...
+    1~5글자 대문자 알파벳 ticker만 수집. NASDAQ-100 자체가 시총 가중 지수
+    구성종목이라 결과 = 사실상 NASDAQ 시총 상위 ~100종목.
+
+    n > 100이면 100으로 cap (NASDAQ-100 한정).
+    """
+    try:
+        import requests
+    except ImportError:
+        log.warning("requests 미설치 — NASDAQ Wikipedia fallback 불가")
+        return []
+
+    try:
+        r = requests.get(_NASDAQ100_URL,
+                         headers={"User-Agent": _NAVER_UA}, timeout=15)
+        if r.status_code != 200:
+            log.warning("Wikipedia NASDAQ-100 status=%d", r.status_code)
+            return []
+    except Exception as e:
+        log.warning("Wikipedia NASDAQ-100 fetch failed: %s", e)
+        return []
+
+    html = r.text
+    # Current_components 섹션부터 다음 섹션 전까지만 잘라 잘못된 매치 줄임
+    section_anchors = [
+        'id="Current_components"',
+        'id="Components"',
+        'id="Component_companies"',
+    ]
+    start = -1
+    for anchor in section_anchors:
+        idx = html.find(anchor)
+        if idx != -1:
+            start = idx
+            break
+    if start == -1:
+        start = 0
+    # 다음 섹션 헤더로 컷
+    next_anchors = [
+        'id="Component_changes"',
+        'id="Historical_components"',
+        'id="References"',
+        'id="See_also"',
+        'id="External_links"',
+    ]
+    cut_candidates = []
+    for anchor in next_anchors:
+        idx = html.find(anchor, start + 1)
+        if idx > 0:
+            cut_candidates.append(idx)
+    end = min(cut_candidates) if cut_candidates else len(html)
+    section = html[start:end] if start >= 0 else html
+
+    # 표 자체 ID = "constituents". 그 안에서 각 row의 첫 td = ticker text.
+    # 패턴: <td>TICKER</td>\s*<td><a href="/wiki/...">Company</a>...
+    table_idx = section.find('id="constituents"')
+    if table_idx == -1:
+        table_idx = section.find('wikitable sortable')
+    table_end = section.find('</table>', table_idx) if table_idx >= 0 else -1
+    table_html = section[table_idx:table_end] if table_idx >= 0 and table_end > 0 else section
+
+    candidates = re.findall(
+        r'<td>([A-Z][A-Z\.\-]{0,5})</td>\s*<td><a href="/wiki/[^"]+"',
+        table_html,
+    )
+
+    tickers: List[str] = []
+    seen = set()
+    for t in candidates:
+        # BRK.B 같은 경우 yfinance는 BRK-B 형태 — NASDAQ-100엔 거의 없으나 안전 변환
+        sym = t.replace(".", "-")
+        if not sym.replace("-", "").isalpha():
+            continue
+        if len(sym) > 6:
+            continue
+        if sym in seen:
+            continue
+        seen.add(sym)
+        tickers.append(sym)
+
+    if not tickers:
+        log.warning("Wikipedia NASDAQ-100 parse returned empty — pattern may have changed")
+        return []
+
+    n_cap = min(n, 100)  # NASDAQ-100 한정
+    return tickers[:n_cap]
+
+
 def get_watchlist(market: str, n: Optional[int] = None) -> List[str]:
     """
     market: KOSPI | KOSDAQ | NASDAQ
@@ -154,10 +257,6 @@ def get_watchlist(market: str, n: Optional[int] = None) -> List[str]:
     if n is None:
         return list(static)
 
-    if market == "NASDAQ":
-        # 동적 확장은 yfinance 비싸서 미지원 — static 그대로
-        return list(static)[:n] if n <= len(static) else list(static)
-
     if n <= 0:
         return []
 
@@ -173,8 +272,13 @@ def get_watchlist(market: str, n: Optional[int] = None) -> List[str]:
         except Exception:
             pass
 
-    log.info("Fetching top %d %s by market cap (pykrx)...", n, market)
-    tickers = _fetch_top_n_kr(market, n)
+    if market == "NASDAQ":
+        log.info("Fetching NASDAQ-100 tickers from Wikipedia (target n=%d, cap=100)...", n)
+        tickers = _fetch_top_n_nasdaq_wikipedia(n)
+    else:
+        log.info("Fetching top %d %s by market cap (pykrx/Naver)...", n, market)
+        tickers = _fetch_top_n_kr(market, n)
+
     if not tickers:
         log.warning("Dynamic fetch failed — falling back to static (%d tickers)", len(static))
         return list(static)

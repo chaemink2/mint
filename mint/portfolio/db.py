@@ -433,12 +433,15 @@ def _evaluate_single_outcome(sig: dict) -> Optional[dict]:
 
     반환: {'outcome', 'outcome_max', 'outcome_min'} 또는 None
     - outcome: 'WIN' (target 먼저 도달), 'LOSS' (stop 먼저), 'TIME_EXIT' (둘 다 안 도달)
+
+    시장별 일봉 소스:
+      - KOSPI/KOSDAQ → pykrx (`krx_client`)
+      - NASDAQ → yfinance (`us_client`)
     """
     from datetime import datetime as _dt
     from datetime import timedelta as _td
     from config.settings import config as _cfg
     from config.tz import to_kst, now_kst
-    from data import krx_client as _krx
 
     try:
         created = _dt.fromisoformat(sig["created_at"])
@@ -457,11 +460,17 @@ def _evaluate_single_outcome(sig: dict) -> Optional[dict]:
     if not target or not stop or not ref:
         return None
 
-    if sig.get("market") not in ("KOSPI", "KOSDAQ"):
+    market = sig.get("market") or ""
+    if market not in ("KOSPI", "KOSDAQ", "NASDAQ"):
         return None
 
     try:
-        bars = _krx.fetch_daily_bars(sig["ticker"], sig["market"], days=5)
+        if market == "NASDAQ":
+            from data import us_client as _us
+            bars = _us.fetch_daily_bars(sig["ticker"], market, days=5)
+        else:
+            from data import krx_client as _krx
+            bars = _krx.fetch_daily_bars(sig["ticker"], market, days=5)
     except Exception:
         return None
     if bars is None or bars.empty:
@@ -469,6 +478,8 @@ def _evaluate_single_outcome(sig: dict) -> Optional[dict]:
 
     bars = bars.copy()
     bars["ts_local"] = pd.to_datetime(bars["ts_local"])
+    # NASDAQ ts_local은 America/New_York tz-aware. created는 KST tz-aware.
+    # pandas는 tz-aware끼리 비교는 자동 변환 가능 → 그대로 비교.
     after = bars[bars["ts_local"] > created]
     if after.empty:
         return None

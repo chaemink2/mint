@@ -76,7 +76,7 @@ def compute_dynamic_exit(
     """종목 ATR과 시장 regime → DynamicExit.
 
     atr_pct: ATR/close. 0~0.10 정도 정상 범위.
-    market: 'KOSPI' | 'KOSDAQ'.
+    market: 'KOSPI' | 'KOSDAQ' | 'NASDAQ'.
     regime: 명시 안 하면 시장에 맞는 regime 조회 (SIDEWAYS 폴백).
     """
     if regime is None:

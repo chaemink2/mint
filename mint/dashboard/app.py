@@ -205,7 +205,7 @@ with st.sidebar:
 if page == "📊 대시보드":
     st.markdown("## 📊 대시보드")
 
-    # 시장 지수 (카드 a 활용)
+    # 시장 지수 (카드 a 활용) — KOSPI/KOSDAQ (Naver) + NASDAQ regime score만
     summary = _market_summary_cached()
     mc1, mc2 = st.columns(2)
     for col, code in zip((mc1, mc2), ("KOSPI", "KOSDAQ")):
@@ -219,11 +219,11 @@ if page == "📊 대시보드":
         else:
             col.metric(code, "—", "데이터 없음")
 
-    # 시장 regime (2026-05-22 추가)
+    # 시장 regime (2026-05-22 KR · 2026-05-26 NASDAQ 추가)
     try:
         from engine.market_regime import get_regime
-        rc1, rc2 = st.columns(2)
-        for col, code in zip((rc1, rc2), ("KOSPI", "KOSDAQ")):
+        rc1, rc2, rc3 = st.columns(3)
+        for col, code in zip((rc1, rc2, rc3), ("KOSPI", "KOSDAQ", "NASDAQ")):
             ri = get_regime(code)
             if ri is not None:
                 col.metric(
@@ -235,7 +235,8 @@ if page == "📊 대시보드":
                 col.metric(f"{code} regime", "—", "조회 실패")
         st.caption(
             "Regime은 dynamic exit(target/stop/holding)에 반영됨. "
-            "강세→길게 잡고 작은 stop / 약세→짧게 자르고 작은 target."
+            "강세→길게 잡고 작은 stop / 약세→짧게 자르고 작은 target. "
+            "NASDAQ regime은 ^IXIC 일봉 기반 (KST 새벽 종가)."
         )
     except Exception as e:
         st.caption(f"Regime 모듈 미로드: {e}")
@@ -379,7 +380,15 @@ elif page == "🎯 추천 시그널":
                     else:
                         stale_badge = f'<span class="tag-fresh">✓ 신선 {drift:+.1f}%</span>'
 
-            live_part = f" · 현재가 {live_price:,.0f}" if live_price else ""
+            cur_sym = "$" if s["market"] == "NASDAQ" else "₩"
+            ref_fmt = f"{cur_sym}{ref:,.2f}" if s["market"] == "NASDAQ" else f"{ref:,.0f}원"
+            tgt_fmt = f"{cur_sym}{tgt:,.2f}" if s["market"] == "NASDAQ" else f"{tgt:,.0f}원"
+            stp_fmt = f"{cur_sym}{stp:,.2f}" if s["market"] == "NASDAQ" else f"{stp:,.0f}원"
+            live_fmt = (
+                f"{cur_sym}{live_price:,.2f}" if (live_price and s["market"] == "NASDAQ")
+                else (f"{live_price:,.0f}원" if live_price else "")
+            )
+            live_part = f" · 현재가 {live_fmt}" if live_price else ""
             st.markdown(
                 f"""
             <div class="signal-buy">
@@ -387,8 +396,8 @@ elif page == "🎯 추천 시그널":
                 <strong>{s.get('name') or s['ticker']}</strong>
                 <code>{s['ticker']}</code>{stale_badge}
                 — 모멘텀 +{exp:.1f}% · 리스크 {s.get('risk_score', 0):.0f}
-                · 기준가 {ref:,.0f}{live_part} · 유효 ~{valid}
-                <br>목표 {tgt:,.0f} / 손절 {stp:,.0f}
+                · 기준가 {ref_fmt}{live_part} · 유효 ~{valid}
+                <br>목표 {tgt_fmt} / 손절 {stp_fmt}
                 · 신뢰도 {(s.get('confidence') or 0)*100:.0f}%
             </div>
             """,

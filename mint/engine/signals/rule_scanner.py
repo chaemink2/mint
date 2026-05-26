@@ -170,8 +170,10 @@ def evaluate_ticker(
 
     # 2026-05-22 Dynamic exit — 시장 regime + 종목 ATR 기반 target/stop/hold
     # ML 모델은 binary classifier 그대로. target/stop/hold만 종목·상황별 동적.
+    # 2026-05-26 NASDAQ 지원 추가 (^IXIC regime).
     atr_pct = (risk / 500.0) if risk > 0 else 0.02  # _risk_score = ATR_pct * 500
-    if market in ("KOSPI", "KOSDAQ"):
+    from engine.market_regime import SUPPORTED_REGIME_MARKETS
+    if market in SUPPORTED_REGIME_MARKETS:
         from engine.market_regime import get_regime_or_sideways
         from engine.dynamic_exit import compute_dynamic_exit
         _regime = get_regime_or_sideways(market)
@@ -183,7 +185,7 @@ def evaluate_ticker(
         dynamic_target_pct = _de.target_pct
         dynamic_stop_pct = _de.stop_pct
     else:
-        # NASDAQ 등 — regime/dynamic 미지원, 기존 고정값 유지
+        # 미지원 시장 — 기존 고정값 유지
         target_price = ref_price * (1 + sig.target_return)
         stop_price = ref_price * (1 + sig.stop_loss)
         max_hold_hours_val = float(sig.max_hold_hours)

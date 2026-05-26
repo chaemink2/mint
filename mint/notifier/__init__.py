@@ -55,6 +55,13 @@ def _market_emoji(market: str) -> str:
     return {"KOSPI": "🇰🇷", "KOSDAQ": "🇰🇷", "NASDAQ": "🇺🇸"}.get(market, "📈")
 
 
+def _format_price(value: float, market: str) -> str:
+    """시장별 통화 포맷. KR=원(정수), NASDAQ=$(소수 2자리)."""
+    if market == "NASDAQ":
+        return f"${value:,.2f}"
+    return f"{value:,.0f}원"
+
+
 def _freshness_line(ticker: str, market: str, ref_price: float) -> Optional[str]:
     """KIS 현재가 fetch → drift 마커 줄 반환. 없으면 None (KIS 미설정/실패).
 
@@ -135,8 +142,8 @@ def _format_buy_signal(sig: dict) -> str:
     # truncate가 라인 단위라 아래쪽부터 잘림
     lines = [
         f"🟢 [Mint 매수] {_market_emoji(market)} {name} ({sig['ticker']})",
-        f"기준가 {ref:,.0f}원",
-        f"🎯 {target:,.0f} ({target_ret:+.1f}%) / 손절 {stop:,.0f} ({stop_ret:+.1f}%)",
+        f"기준가 {_format_price(ref, market)}",
+        f"🎯 {_format_price(target, market)} ({target_ret:+.1f}%) / 손절 {_format_price(stop, market)} ({stop_ret:+.1f}%)",
         f"⏱ {hold_h:.0f}h내 권고 · 유효 {valid_min}분",
         regime_line,
         fresh or "",
@@ -184,7 +191,7 @@ def _format_exit_advice(advice) -> str:
     reason_kr = _REASON_KR.get(reason, reason)
     lines = [
         f"{emoji} [Mint {action_kr}] {_market_emoji(market)} {name} ({ticker})",
-        f"현재 {cur:,.0f} / 매수 {buy:,.0f} ({pnl:+.2f}%) {color}",
+        f"현재 {_format_price(cur, market)} / 매수 {_format_price(buy, market)} ({pnl:+.2f}%) {color}",
         f"사유: {reason_kr} · 보유 {hold_h:.1f}h",
         d.get("note") or "",
         "👉 실제 매도는 카카오페이 앱에서 실행",
@@ -428,10 +435,10 @@ def send_daily_summary(
         f"보유 포지션: {open_positions}건",
         f"매도 권고(HOLD 제외): {exit_actions}건",
     ]
-    # 시장 regime (KOSPI/KOSDAQ)
+    # 시장 regime (KOSPI/KOSDAQ + NASDAQ — 야간 매매 의향 있는 사용자 위해)
     try:
-        from engine.market_regime import both_regimes_line
-        rl = both_regimes_line()
+        from engine.market_regime import regimes_line
+        rl = regimes_line(["KOSPI", "KOSDAQ", "NASDAQ"])
         if rl and "조회 실패" not in rl:
             lines.append(rl)
     except Exception:
@@ -465,8 +472,8 @@ def _format_expiry(sig: dict) -> str:
     lines = [
         f"{label}",
         f"{_market_emoji(market)} {name} ({ticker})",
-        f"기준가 {ref:,.0f}원" + (
-            f" → 현재 {cur:,.0f}원" if cur else ""
+        f"기준가 {_format_price(ref, market)}" + (
+            f" → 현재 {_format_price(cur, market)}" if cur else ""
         ),
         "👉 이미 매수했다면 별도 매도 권고를 기다리세요.",
         "    아직 안 샀다면 이 시그널은 무시하세요.",

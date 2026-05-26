@@ -1,10 +1,10 @@
 """
-시장 regime 산출 — KOSPI / KOSDAQ 각각 독립.
+시장 regime 산출 — KOSPI / KOSDAQ / NASDAQ 각각 독립.
 
 5단계 카테고리:
   STRONG_BULL  · BULL · SIDEWAYS · BEAR · STRONG_BEAR
 
-규칙 (KOSPI/KOSDAQ 각각 동일):
+규칙 (시장별 동일 룰):
   - ret_5d : 최근 5거래일 등락률
   - ret_20d : 최근 20거래일 등락률
   - ma20_dist : (close - MA20) / MA20
@@ -20,10 +20,18 @@
     > -0.04  → BEAR
     else     → STRONG_BEAR
 
+지수 매핑:
+  - KOSPI  → ^KS11
+  - KOSDAQ → ^KQ11
+  - NASDAQ → ^IXIC (NASDAQ Composite). ^NDX (NASDAQ-100)도 후보지만 구성종목
+    중첩이 더 작은 Composite를 기본값으로. NASDAQ-100 종목 대부분이 Composite에
+    포함돼 시장 ‘분위기’를 더 잘 대표.
+
 배경:
   - 사용자 직관(2026-05-22): "상승장엔 다 오르고 하락장엔 다 떨어진다 →
     지수 추종이 종목 선택보다 더 큰 효과". 본 모듈은 dynamic_exit에 input.
-  - KOSPI 종목과 KOSDAQ 종목은 다른 regime 적용 (시장 변동성 다름).
+  - 시장별 변동성 다름 → 같은 룰이지만 결과는 분기.
+  - NASDAQ 임계값(±0.04, ±0.01)은 KR과 동일 시작 — 1주 운영 후 calibration 검토.
   - 캐시 60초 — scan마다 fetch 비용 절감.
 """
 from __future__ import annotations
@@ -86,8 +94,15 @@ class RegimeInfo:
 # ── 내부 산출 ────────────────────────────────────────────────
 
 def _market_index_yfinance(market: str) -> Optional[str]:
-    """KOSPI/KOSDAQ 지수 yfinance ticker."""
-    return {"KOSPI": "^KS11", "KOSDAQ": "^KQ11"}.get(market.upper())
+    """시장 → yfinance 지수 ticker."""
+    return {
+        "KOSPI": "^KS11",
+        "KOSDAQ": "^KQ11",
+        "NASDAQ": "^IXIC",   # NASDAQ Composite
+    }.get(market.upper())
+
+
+SUPPORTED_REGIME_MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ")
 
 
 def _fetch_index_bars(market: str, days: int = 40) -> Optional[pd.DataFrame]:
@@ -163,11 +178,11 @@ def _compute_regime(market: str, df: pd.DataFrame) -> Optional[RegimeInfo]:
 # ── public API ──────────────────────────────────────────────
 
 def get_regime(market: str, force_refresh: bool = False) -> Optional[RegimeInfo]:
-    """KOSPI 또는 KOSDAQ regime. 60초 캐시. fetch 실패 시 None.
+    """KOSPI / KOSDAQ / NASDAQ regime. 60초 캐시. fetch 실패 시 None.
     None일 때는 호출 측이 SIDEWAYS로 폴백 (보수적).
     """
     market = market.upper()
-    if market not in ("KOSPI", "KOSDAQ"):
+    if market not in SUPPORTED_REGIME_MARKETS:
         return None
 
     now = time.time()
@@ -199,15 +214,23 @@ def get_regime_or_sideways(market: str) -> RegimeInfo:
     )
 
 
-def both_regimes_line() -> str:
-    """KOSPI + KOSDAQ regime 한 줄 (카톡/대시보드용).
-    예: "🟢 KOSPI 상승 (5d +2.4%) / 🔴 KOSDAQ 하락 (5d -3.1%)"
+def regimes_line(markets: Optional[list] = None) -> str:
+    """주어진 시장들의 regime 한 줄 (카톡/대시보드용).
+    예: "🟢 KOSPI 상승 (5d +2.4%) / 🔴 KOSDAQ 하락 (5d -3.1%) / 🟢 NASDAQ 상승 (5d +1.5%)"
+    markets 미지정 시 KOSPI+KOSDAQ만 (KR 운영 기본).
     """
-    kospi = get_regime("KOSPI")
-    kosdaq = get_regime("KOSDAQ")
+    if markets is None:
+        markets = ["KOSPI", "KOSDAQ"]
     parts = []
-    if kospi is not None:
-        parts.append(f"{kospi.emoji()} KOSPI {kospi.ko()} (5d {kospi.ret_5d*100:+.1f}%)")
-    if kosdaq is not None:
-        parts.append(f"{kosdaq.emoji()} KOSDAQ {kosdaq.ko()} (5d {kosdaq.ret_5d*100:+.1f}%)")
+    for m in markets:
+        info = get_regime(m)
+        if info is not None:
+            parts.append(
+                f"{info.emoji()} {m} {info.ko()} (5d {info.ret_5d*100:+.1f}%)"
+            )
     return " / ".join(parts) if parts else "시장 regime 조회 실패"
+
+
+def both_regimes_line() -> str:
+    """[DEPRECATED 호환] KOSPI + KOSDAQ regime 한 줄. regimes_line() 사용 권장."""
+    return regimes_line(["KOSPI", "KOSDAQ"])
