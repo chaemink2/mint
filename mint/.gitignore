@@ -33,6 +33,7 @@ data/.universe_cache.json
 data/.stock_names.json
 data/raw/*
 data/processed/*
+data/audit/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 logs/

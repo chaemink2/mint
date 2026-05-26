@@ -152,7 +152,9 @@ def evaluate_ticker(
     ml_conf = _ml_probability(df)
     if ml_conf is not None and ml_conf < sig.min_model_confidence:
         return None
-    if stats is not None and ml_conf is not None:
+    # 카운터는 funnel 단조감소를 위해 평가 안 한 시그널도 통과로 셈
+    # (ML/분봉 OFF 또는 모델 미로드 시 passed_ml < signals_created 같은 모순 방지)
+    if stats is not None:
         stats["passed_ml"] = stats.get("passed_ml", 0) + 1
 
     # 분봉 룰 (use_minute_rule=True일 때만, 일봉+ML 통과 후 AND 결합)
@@ -163,8 +165,8 @@ def evaluate_ticker(
         if minute_info is None:
             log.debug("Skip %s — 분봉 룰 미통과 또는 KIS 분봉 fetch 실패", ticker)
             return None
-        if stats is not None:
-            stats["passed_minute"] = stats.get("passed_minute", 0) + 1
+    if stats is not None:
+        stats["passed_minute"] = stats.get("passed_minute", 0) + 1
 
     # 2026-05-22 Dynamic exit — 시장 regime + 종목 ATR 기반 target/stop/hold
     # ML 모델은 binary classifier 그대로. target/stop/hold만 종목·상황별 동적.
