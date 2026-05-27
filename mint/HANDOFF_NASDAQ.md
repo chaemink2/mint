@@ -16,7 +16,8 @@
 | **Stage 2 ML 학습** | ✅ 완료 | `mint_lgbm_us.joblib` (171종목, 24h +2%/-2%, AUC 0.553, best_iter 31, 임계값 0.55에서 precision 0.636·일평균 0.22건). 라벨 변경 사용자 (B) 합의 |
 | **scan-us.yml** | ✅ 활성화 | `*/10 13-21 * * 1-5` UTC (NY 정규장 DST/비DST 모두). ML ON · 분봉 OFF (Alpaca 미도입) |
 | Stage 2.5 분봉 (Alpaca) | ⏳ 보류 | 사용자 (3) Alpaca 결정. 가입·키 발급 후 도입 |
-| Stage 3 백테스트·시범 | ⏳ 다음 | NASDAQ 백테스트 + 1주 시범 운영 outcome 측정 |
+| **Stage 3 백테스트** | ✅ 완료 | NASDAQ 171종목 730일 백테스트: 135건 시그널, **승률 84.4% / 평균 +1.77%** (in-sample 일부 포함). Val 영역(16건) 75%/+0.7% — 시범 운영으로 추가 검증 필요 |
+| Stage 3 시범 운영 | ⏳ 진행 중 | GHA scan-us 활성화로 자동 시작. 1주 outcome 누적 후 정밀도 측정 |
 
 ---
 
