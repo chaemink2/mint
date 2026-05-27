@@ -212,6 +212,35 @@ mint/
 | 2026-05-18c | 100 (Naver) | 365d | 1d | 47,440 | 0.443 | **0.596** | 0.6598 | 59 | **+5 피처**(bb_position, obv_slope, gap_pct, regime_trend, turnover_pct60). AUC +0.002 — 의미 없음. ⚠️ **5/19 수정 사항**: 학습 분포에 룰 외 시점이 섞여 있어 운영(룰+ML 통과)과 분포 mismatch. 5/18d/e 수치는 운영에서 재현 안 됨. |
 | 2026-05-19a | 100 (Naver) | 365d | 1d | **6,267** | 0.419 | 0.551 | 0.6701 | 16 | **P1 학습-추론 정합 수정** — build_ticker_dataset에 룰 필터(expected/risk/vol) 추가. 데이터 ÷7.6로 줄어 AUC 하락(-0.045) 노이즈 근처. 진짜 운영 동작은 이 모델 기준. |
 | 2026-05-19c | **200 (Naver)** | **730d** | 1d | **21,822** | 0.414 | **0.582** | 0.6689 | 39 | **카드 E: 데이터 ×3.5 확대 (정합 유지)**. AUC +0.031 회복, Best iter 16→39, 모델 안정성 ↑. 사용자 임계값 0.60에서 **일평균 1.3개·precision 0.79**. Top-1/day win 0.745. atr_pct 비중 22.9%로 1위, gap_pct 7.2% 신 피처 가치 확인. |
+| 2026-05-26 NASDAQ exp1 | 100 (Wikipedia NASDAQ-100) | 730d | 1d | 4,514 | 0.480 | 0.544 | 0.6911 | 3 | **NASDAQ 첫 학습** (KR과 동일 라벨 24h +3%/-2%). AUC 합격선(0.55) 미달, best_iter 3은 모델이 어떤 신호도 못 찾았다는 의미. p99=0.535로 임계값 0.55 이상 시그널 0건. 데이터 부족 의심. |
+| 2026-05-26 NASDAQ exp2 | 171 (NASDAQ-100 + S&P NASDAQ) | 730d | 1d | 7,767 | 0.476 | 0.545 | 0.6897 | 6 | **데이터 확대 (+72%)**. AUC 무변화(+0.001). 종목 수 확대만으로 한계 — 시장 분포 자체가 단순 OHLCV 피처로 24h +3% 예측 어려움 (효율적 시장). |
+| **2026-05-26 NASDAQ exp3** ⭐ | **171** | **730d** | **1d** | **7,767** | **0.486** | **0.553** | **0.6885** | **31** | **라벨 변경: 24h +2%/-2%** (사용자 (B) 결정). AUC +0.008 · best_iter 31로 학습 깊이 ↑. 임계값 0.55에서 precision 0.636 · 일평균 0.22건. **운영 모델 채택 → mint_lgbm_us.joblib**. dynamic exit max_hold(BULL 30h)와 정합. KR 동급(precision 0.79) 미달 → outcome 누적 후 재학습 전제. |
+| 2026-05-27 NASDAQ exp4 | 171 | 730d | 2d | 7,770 | 0.460 | 0.545 | 0.6817 | 14 | 비교 실험: 48h +3%/-2%. AUC 0.545 · best_iter 14로 exp3보다 낮음. 임계값 0.60에서 precision 0.636 · 일평균 0.11건. 보유 48h는 dynamic exit(30h)과 mismatch → **미채택**. |
+
+### NASDAQ 모델 필터 날카로움 (exp3 = 운영 모델, val n=1,554, 101일)
+| 임계값 | 통과 | 일평균 | Precision | Lift |
+|---|---|---|---|---|
+| 0.40 | 1,428 | 14.1 | 0.499 | 1.03× |
+| 0.50 | 638 | 6.3 | 0.549 | 1.13× |
+| **0.55** ⭐ | **22** | **0.22** | **0.636** | **1.31×** |
+| 0.60 | 4 | 0.04 | 1.000 | 2.06× (n=4 noise) |
+| Top-1/day | 101 | 1.0 | 0.485 | 1.00× |
+| Top-2/day | 202 | 2.0 | 0.533 | 1.10× |
+
+→ 운영 임계값 **0.55** (1주 1~2건). KR(0.60에서 1.3건/0.79)와는 격차. 분봉 룰 OFF (Alpaca 미도입) + outcome 누적 후 재학습 시 도약 기대.
+
+### NASDAQ exp3 피처 중요도 (gain Top 7)
+| 순위 | 피처 | Gain % |
+|---|---|---|
+| 1 | ret_1d | 10.9 |
+| 2 | ret_5d | 10.5 |
+| 3 | obv_slope | 8.3 |
+| 4 | gap_pct | 8.3 |
+| 5 | dist_high60 | 6.7 |
+| 6 | rsi_14 | 6.6 |
+| 7 | atr_pct | 6.5 |
+
+→ KR과 다르게 atr_pct 비중 ↓ (22.9% → 6.5%). NASDAQ은 변동성 자체보다 **단기 모멘텀(ret_1d/5d)과 OBV 흐름**이 더 강한 신호. 피처 중요도가 KR보다 더 평탄 (rsi_14 20.7% → 6.6%) — 한 피처에 의존하지 않는 분포.
 
 **해석**:
 - 5/17→5/18a: holding window 1d→3d 변경만으로는 AUC 노이즈 범위(+0.010). 보유기간이 문제는 아님.
@@ -324,6 +353,11 @@ mint/
 | 2026-05-20 | **카드 d/e/f/g 완료**: 대시보드 통합 리프레시 — 시장지수+funnel+outcome trend(d), 보유 포지션 P&L 게이지(e), 모델 분석 페이지+confidence 슬라이더+feature importance(f), 모바일 친화 레이아웃(g) | [dashboard/app.py](dashboard/app.py) |
 | 2026-05-20 | **Cursor 3차 검토 R2~R6 반영**: 대시보드 caption 보강(R2), P&L gauge edge case 가드(R3), accumulate_scan_stats file lock(R4), validate_filters.py 스크립트(R5), TZ 유틸 Cloud 선행(R6) | [REVIEW_CURSOR.md](REVIEW_CURSOR.md) Section G |
 | 2026-05-20 | **mock state cleanup**: `.notifier_state.json`의 `scan_stats_2026-05-21`은 카드 c 검증 시 잔여 mock 데이터. 실제 5/21 시그널 0건 (DB 확인). 정리 완료 | data/.notifier_state.json |
+| 2026-05-26 | **NASDAQ Stage 1 완료** (`9311065`): 동적 워치리스트(Wikipedia NASDAQ-100), regime ^IXIC, dynamic exit·outcome 평가 NASDAQ 분기, 카톡 currency 분기, 대시보드 regime 3개. KR 운영 무영향. | HANDOFF_NASDAQ.md |
+| 2026-05-26 | **NASDAQ 학습 결정 사안**: ML 전용 모델(A) / 분봉 Alpaca(3) / 즉시 Stage 1(i) / 실 카카오페이 매매(a). 4가지 합의 후 Stage 1 진행. | 별도 세션 |
+| 2026-05-26 | **NASDAQ ML 라벨 사안 (B)**: KR 24h +3% 동일 라벨로 AUC 0.545 무변화 → **24h +2%/-2%로 변경**. AUC 0.553 best_iter 31 (운영 가능 수준). KR과 비교 가능성 일부 손실 인정. | 학습결과 NASDAQ exp3 |
+| 2026-05-27 | **NASDAQ Stage 2 완료**: `mint_lgbm_us.joblib` (24h +2% exp3 모델 채택). 임계값 0.55 운영 (precision 0.636 · 일평균 0.22건). 48h +3% 비교실험은 미채택. | [engine/models/lgbm.py:MODEL_PATHS](engine/models/lgbm.py) |
+| 2026-05-27 | **scan-us.yml schedule 활성화**: `*/10 13-21 * * 1-5` UTC (NY 정규장 DST/비DST 모두 커버). ML 활성화·분봉 OFF (Alpaca 미도입). | [.github/workflows/scan-us.yml](.github/workflows/scan-us.yml) |
 
 ---
 

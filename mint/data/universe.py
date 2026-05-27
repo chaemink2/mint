@@ -147,16 +147,62 @@ def _fetch_top_n_kr(market: str, n: int) -> List[str]:
 
 
 _NASDAQ100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
+_SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+
+def _fetch_sp500_nasdaq_listed() -> List[str]:
+    """S&P 500 Wikipedia 페이지에서 NASDAQ-listed 종목만 추출.
+
+    표 구조: <td><a href="https://www.nasdaq.com/...">TICKER</a></td> (NASDAQ)
+            <td><a href="https://www.nyse.com/...">TICKER</a></td>   (NYSE)
+
+    NASDAQ 호스트만 필터 → S&P 500 ∩ NASDAQ listing.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+    try:
+        r = requests.get(_SP500_URL,
+                         headers={"User-Agent": _NAVER_UA}, timeout=15)
+        if r.status_code != 200:
+            log.warning("Wikipedia S&P500 status=%d", r.status_code)
+            return []
+    except Exception as e:
+        log.warning("Wikipedia S&P500 fetch failed: %s", e)
+        return []
+
+    html = r.text
+    # constituents 표만 자르기
+    table_idx = html.find('id="constituents"')
+    if table_idx == -1:
+        return []
+    table_end = html.find('</table>', table_idx)
+    table_html = html[table_idx:table_end] if table_end > 0 else html[table_idx:]
+
+    # NASDAQ exchange URL 패턴
+    candidates = re.findall(
+        r'<a rel="nofollow" class="external text" href="https://www\.nasdaq\.com/[^"]+">([A-Z][A-Z\.\-]{0,5})</a>',
+        table_html,
+    )
+    seen = set()
+    tickers: List[str] = []
+    for t in candidates:
+        sym = t.replace(".", "-")
+        if sym in seen:
+            continue
+        seen.add(sym)
+        tickers.append(sym)
+    return tickers
 
 
 def _fetch_top_n_nasdaq_wikipedia(n: int) -> List[str]:
-    """Wikipedia NASDAQ-100 페이지에서 ticker 추출.
+    """Wikipedia NASDAQ-100 + (n > 100 시) S&P 500 NASDAQ-listed 추출.
 
-    페이지 표 구조: <td><a href="/wiki/...">SYMBOL</a></td><td>...
-    1~5글자 대문자 알파벳 ticker만 수집. NASDAQ-100 자체가 시총 가중 지수
-    구성종목이라 결과 = 사실상 NASDAQ 시총 상위 ~100종목.
+    1단계: NASDAQ-100 100종목 시드 (시총 가중 자체가 시총 상위 100).
+    2단계: n > 100 시 S&P 500 ∩ NASDAQ-listed 추가 (dedup).
 
-    n > 100이면 100으로 cap (NASDAQ-100 한정).
+    결과: KR 200종목 워치리스트와 비교 가능한 규모 (~200~250).
     """
     try:
         import requests
@@ -236,8 +282,24 @@ def _fetch_top_n_nasdaq_wikipedia(n: int) -> List[str]:
         log.warning("Wikipedia NASDAQ-100 parse returned empty — pattern may have changed")
         return []
 
-    n_cap = min(n, 100)  # NASDAQ-100 한정
-    return tickers[:n_cap]
+    # n <= 100이면 NASDAQ-100만으로 충분
+    if n <= 100:
+        return tickers[:n]
+
+    # n > 100이면 S&P 500 NASDAQ-listed 추가 (dedup)
+    log.info("NASDAQ-100 %d 종목 + S&P500 NASDAQ-listed 추가 fetch (목표 n=%d)...",
+             len(tickers), n)
+    sp_nasdaq = _fetch_sp500_nasdaq_listed()
+    seen = set(tickers)
+    added = 0
+    for t in sp_nasdaq:
+        if t in seen:
+            continue
+        seen.add(t)
+        tickers.append(t)
+        added += 1
+    log.info("S&P500에서 추가 %d 종목 (총 %d 종목)", added, len(tickers))
+    return tickers[:n]
 
 
 def get_watchlist(market: str, n: Optional[int] = None) -> List[str]:

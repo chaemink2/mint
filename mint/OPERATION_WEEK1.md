@@ -15,7 +15,7 @@
 | **scan-kr** | GHA cron | 평일 09:00~15:50 KST 10분 간격 (`*/10 0-6 * * 1-5` UTC) | KOSPI/KOSDAQ 200종목 룰+ML+분봉 |
 | **daily-summary** | GHA cron | 평일 15:35 KST (`35 6 * * 1-5` UTC) | outcome 평가 + 카톡 일일 요약 |
 | **outcomes** | GHA cron | 평일 23:30 KST (`30 14 * * 1-5` UTC) | 24h 경과 시그널 outcome 평가 |
-| **scan-us** | GHA | schedule 주석 (수동만) | NASDAQ 야간 (현재 비활성) |
+| **scan-us** | GHA cron | 평일 NY 정규장 KST 22:30~05:50 (`*/10 13-21 * * 1-5` UTC) | NASDAQ 171종목 룰+ML (분봉 OFF, 2026-05-27 활성화) |
 | **대시보드** | Streamlit Cloud | 24/7 (1주 inactive sleep) | `https://chaemink2-mint.streamlit.app` |
 | **로컬 작업 스케줄러** | Windows 데스크탑 | 평일 08:30 + 10분 / 15:35 | **5/28까지 backup으로 유지**, 그 후 Disable |
 

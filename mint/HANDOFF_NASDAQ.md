@@ -2,8 +2,21 @@
 
 > **목표**: 현재 KOSPI/KOSDAQ 동급 수준으로 NASDAQ 운영 가능하게.
 > **작성일**: 2026-05-24
+> **상태 (2026-05-27)**: **Stage 1+2 완료** (`9311065` + 본 commit). Stage 3 (백테스트 + 1주 시범 운영) 진행 가능.
 > **작업 대상**: 별도 Claude Code Chat 세션. 본 문서는 self-contained — 다른 세션이 이 문서만 읽어도 즉시 작업 시작 가능.
 > **선행 학습**: `OPERATION_WEEK1.md`(현재 KR 운영 상태) + `CLAUDE.md` 픽업 가이드.
+
+---
+
+## ✅ 진행 상태 (2026-05-27)
+
+| Stage | 상태 | 결과 |
+|---|---|---|
+| **Stage 1 인프라** | ✅ 완료 (`9311065`) | universe NASDAQ-100 동적, regime ^IXIC, dynamic exit·outcome 평가 NASDAQ 분기, 카톡 currency 분기, 대시보드 regime 3개 |
+| **Stage 2 ML 학습** | ✅ 완료 | `mint_lgbm_us.joblib` (171종목, 24h +2%/-2%, AUC 0.553, best_iter 31, 임계값 0.55에서 precision 0.636·일평균 0.22건). 라벨 변경 사용자 (B) 합의 |
+| **scan-us.yml** | ✅ 활성화 | `*/10 13-21 * * 1-5` UTC (NY 정규장 DST/비DST 모두). ML ON · 분봉 OFF (Alpaca 미도입) |
+| Stage 2.5 분봉 (Alpaca) | ⏳ 보류 | 사용자 (3) Alpaca 결정. 가입·키 발급 후 도입 |
+| Stage 3 백테스트·시범 | ⏳ 다음 | NASDAQ 백테스트 + 1주 시범 운영 outcome 측정 |
 
 ---
 

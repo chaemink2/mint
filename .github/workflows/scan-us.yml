@@ -3,14 +3,13 @@ name: Mint US Scan (NASDAQ)
 # 평일 NY 정규장 = KST 22:30~익일 05:00 (DST: UTC 13:30~20:00 / 비DST: 14:30~21:00).
 # 둘 다 커버하려면 UTC 13-21 (10분 간격). cron 요일은 UTC 기준 월~금.
 #
-# 활성화 정책 (2026-05-26):
-#   Stage 1 (인프라 완비) 단계는 schedule **비활성** 유지. NASDAQ 전용 ML 모델이
-#   아직 없어 룰만으로 시그널 발급 시 KR과 동급 신뢰도 미달.
-#   Stage 2 (mint_lgbm_us.joblib 학습) 완료 후 schedule 주석 해제 commit으로 활성화.
-#   현재는 workflow_dispatch (수동) 만으로 인프라 시범 동작 검증 가능.
+# 2026-05-27 활성화: Stage 2 NASDAQ 모델 학습 완료 (mint_lgbm_us.joblib).
+#   - 라벨: 24h +2%/-2% (KR 24h +3%/-2%과 다름. 사용자 (B) 결정, 5/26).
+#   - Val AUC 0.553, 임계값 0.55에서 precision 0.636·일평균 0.22건.
+#   - KR 동급 (precision 0.79) 미달이나 운영 outcome 누적 후 재학습 전제로 시작.
 on:
-  # schedule:
-  #   - cron: '*/10 13-21 * * 1-5'   # NY 정규장 cover (DST/비DST 모두)
+  schedule:
+    - cron: '*/10 13-21 * * 1-5'   # NY 정규장 cover (DST/비DST 모두)
   workflow_dispatch: {}
 
 concurrency:
@@ -38,12 +37,12 @@ jobs:
           DATABASE_URL:         ${{ secrets.DATABASE_URL }}
           KAKAO_REST_API_KEY:   ${{ secrets.KAKAO_REST_API_KEY }}
           KAKAO_REDIRECT_URI:   ${{ secrets.KAKAO_REDIRECT_URI }}
-          # Stage 1: NASDAQ ML 모델 아직 학습 안 됨 → ML/분봉 OFF로 룰만 동작.
-          # Stage 2 (mint_lgbm_us.joblib) 완료 후 'true' + 임계값 0.60으로 전환.
-          MINT_USE_ML_CONFIDENCE:    'false'
-          MINT_USE_MINUTE_RULE:      'false'
-          MINT_MIN_ML_CONFIDENCE:    '0.60'
-          MINT_WATCHLIST_SIZE:       '200'   # universe.py가 NASDAQ은 100으로 cap
+          # Stage 2 학습 완료 — ML 활성화. NASDAQ 모델 confidence p99=0.556이라
+          # 임계값 0.55가 실 운영선 (0.60 이상은 사실상 0건). KR 0.60과 다름.
+          MINT_USE_ML_CONFIDENCE:    'true'
+          MINT_USE_MINUTE_RULE:      'false'   # Alpaca 도입 (Stage 2.5) 전 OFF
+          MINT_MIN_ML_CONFIDENCE:    '0.55'
+          MINT_WATCHLIST_SIZE:       '300'    # NASDAQ-100 + S&P NASDAQ 합쳐 ~171
           MINT_MAX_RISK_SCORE:       '45'
           MINT_US_SCAN:              'true'
         run: python -X utf8 mint/main.py scan-us

@@ -41,8 +41,13 @@ def build_ticker_dataset(
     days: int,
     window: int = 60,
     max_hold_days: int = 1,
+    target_return: Optional[float] = None,
+    stop_loss: Optional[float] = None,
 ) -> List[dict]:
     """단일 종목 → (피처, 레이블) 리스트.
+
+    target_return/stop_loss/max_hold_days override 가능 (NASDAQ 라벨 변경 실험용,
+    2026-05-26). None이면 config.signal 기본값 (KR 학습 호환).
 
     중요(2026-05-19 수정): 학습 분포 == 추론 분포가 되도록 룰 필터(룰 스캐너와 동일 조건)
     통과한 시점만 학습 데이터로 사용. 이전 버전은 모든 슬라이딩 윈도우 시점을 학습했으나
@@ -61,6 +66,8 @@ def build_ticker_dataset(
 
     rows: List[dict] = []
     sig = config.signal
+    tgt_ret = target_return if target_return is not None else sig.target_return
+    stop_ret = stop_loss if stop_loss is not None else sig.stop_loss
 
     for i in range(window, len(bars) - 1):
         sub = bars.iloc[i - window : i + 1].reset_index(drop=True)
@@ -83,8 +90,8 @@ def build_ticker_dataset(
             continue
 
         entry_price = float(bars.iloc[i]["close"])
-        target_price = entry_price * (1 + sig.target_return)
-        stop_price = entry_price * (1 + sig.stop_loss)
+        target_price = entry_price * (1 + tgt_ret)
+        stop_price = entry_price * (1 + stop_ret)
 
         trade = _simulate_exit(
             bars=bars,
@@ -114,14 +121,23 @@ def build_dataset(
     days: int = 365,
     max_hold_days: int = 1,
     universe_size: Optional[int] = None,
+    target_return: Optional[float] = None,
+    stop_loss: Optional[float] = None,
 ) -> pd.DataFrame:
     all_rows: List[dict] = []
     for m in markets:
         tickers = _watchlist(m, n=universe_size)
-        log.info("Build dataset %s — %d tickers", m, len(tickers))
+        log.info("Build dataset %s — %d tickers (target=%.3f/stop=%.3f/hold=%dd)",
+                 m, len(tickers),
+                 target_return if target_return is not None else config.signal.target_return,
+                 stop_loss if stop_loss is not None else config.signal.stop_loss,
+                 max_hold_days)
         for t in tickers:
             try:
-                rows = build_ticker_dataset(t, m, days=days, max_hold_days=max_hold_days)
+                rows = build_ticker_dataset(
+                    t, m, days=days, max_hold_days=max_hold_days,
+                    target_return=target_return, stop_loss=stop_loss,
+                )
             except Exception as e:
                 log.debug("build_ticker_dataset(%s) failed: %s", t, e)
                 rows = []
@@ -239,42 +255,78 @@ def train_model(
     )
 
 
+def _resolve_model_path(markets: List[str], explicit: Optional[str]) -> str:
+    """시장 셋에 맞는 기본 모델 경로 결정.
+    explicit 명시 시 그 경로. 없으면 NASDAQ-only → us, 그 외 → KR(기본).
+    KR+NASDAQ 혼합 학습은 분포 mismatch 위험 — 일단 KR 경로 사용 + 경고.
+    """
+    from engine.models.lgbm import MODEL_PATHS, DEFAULT_MODEL_PATH
+    if explicit:
+        return explicit
+    if markets == ["NASDAQ"] or set(markets) == {"NASDAQ"}:
+        return MODEL_PATHS["US"]
+    if set(markets) <= {"KOSPI", "KOSDAQ"}:
+        return MODEL_PATHS["KR"]
+    log.warning("Mixed KR+US markets %s — KR 모델 경로에 저장하나 분포 mismatch 위험. "
+                "시장별 분리 학습 권장.", markets)
+    return DEFAULT_MODEL_PATH
+
+
+def _market_suffix(markets: List[str]) -> str:
+    if set(markets) == {"NASDAQ"}:
+        return "us"
+    if set(markets) <= {"KOSPI", "KOSDAQ"}:
+        return "kr"
+    return "mixed"
+
+
 def run_training(
     markets: Optional[List[str]] = None,
     days: int = 365,
     max_hold_days: int = 1,
     model_path: Optional[str] = None,
     universe_size: Optional[int] = None,
+    target_return: Optional[float] = None,
+    stop_loss: Optional[float] = None,
 ) -> dict:
-    """End-to-end: 데이터셋 → 학습 → 저장."""
+    """End-to-end: 데이터셋 → 학습 → 저장. NASDAQ-only면 us 경로 사용.
+
+    target_return/stop_loss override (NASDAQ 라벨 실험용, 2026-05-26).
+    """
     markets = markets or ["KOSPI", "KOSDAQ"]
-    log.info("Building dataset — markets=%s days=%s universe_size=%s",
-             markets, days, universe_size if universe_size is not None else "static")
+    log.info("Building dataset — markets=%s days=%s universe_size=%s target=%s stop=%s hold=%dd",
+             markets, days, universe_size if universe_size is not None else "static",
+             target_return if target_return is not None else "default",
+             stop_loss if stop_loss is not None else "default",
+             max_hold_days)
     df = build_dataset(markets, days=days, max_hold_days=max_hold_days,
-                       universe_size=universe_size)
+                       universe_size=universe_size,
+                       target_return=target_return, stop_loss=stop_loss)
     log.info("Dataset built — %d samples (pos rate %.2f)",
              len(df), df["label"].mean() if not df.empty else 0)
 
     if df.empty:
         return {"error": "empty dataset", "n_samples": 0}
 
-    # Save dataset for inspection
+    # Save dataset for inspection (시장 suffix 포함)
     os.makedirs("mint/data/models", exist_ok=True)
-    csv_path = f"mint/data/models/training_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    suffix = _market_suffix(markets)
+    csv_path = f"mint/data/models/training_data_{suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     df.to_csv(csv_path, index=False, encoding="utf-8")
     log.info("Dataset saved → %s", csv_path)
 
     trained = train_model(df, max_hold_days=max_hold_days)
-    from engine.models.lgbm import DEFAULT_MODEL_PATH, clear_model_cache
+    from engine.models.lgbm import clear_model_cache
 
-    trained.save(model_path or DEFAULT_MODEL_PATH)
+    save_path = _resolve_model_path(markets, model_path)
+    trained.save(save_path)
     clear_model_cache()
 
     return {
         "n_samples": int(len(df)),
         "pos_rate": float(df["label"].mean()),
         "metrics": trained.val_metrics,
-        "model_path": model_path or DEFAULT_MODEL_PATH,
+        "model_path": save_path,
         "dataset_csv": csv_path,
     }
 

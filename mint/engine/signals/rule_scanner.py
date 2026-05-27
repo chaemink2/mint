@@ -100,14 +100,19 @@ def _resolve_name(ticker: str, market: str) -> str:
     return _NAME_CACHE[key]
 
 
-def _ml_probability(df: pd.DataFrame) -> Optional[float]:
-    """ML confidence (캘리브레이션된 P(win)). 비활성/모델없음/추론실패 시 None."""
+def _ml_probability(df: pd.DataFrame, market: Optional[str] = None) -> Optional[float]:
+    """ML confidence (캘리브레이션된 P(win)). 비활성/모델없음/추론실패 시 None.
+
+    시장별 모델 분기 (2026-05-26): KR=mint_lgbm.joblib, NASDAQ=mint_lgbm_us.joblib.
+    """
     if not config.signal.use_ml_confidence:
         return None
-    model = get_cached_model()
+    model = get_cached_model(market=market)
     if model is None:
         log.warning(
-            "MINT_USE_ML_CONFIDENCE=true지만 모델 미로드 — `python mint/main.py train` 먼저 실행"
+            "MINT_USE_ML_CONFIDENCE=true지만 %s 모델 미로드 — `python mint/main.py train --markets %s` 먼저 실행",
+            market or "default",
+            market or "KOSPI KOSDAQ",
         )
         return None
     feats = compute_features(df)
@@ -149,7 +154,8 @@ def evaluate_ticker(
         stats["passed_volume"] = stats.get("passed_volume", 0) + 1
 
     # ML 필터 — use_ml_confidence=True일 때만. None이면 룰만으로 통과.
-    ml_conf = _ml_probability(df)
+    # 시장별 모델 분기 (KR=mint_lgbm.joblib, NASDAQ=mint_lgbm_us.joblib).
+    ml_conf = _ml_probability(df, market=market)
     if ml_conf is not None and ml_conf < sig.min_model_confidence:
         return None
     # 카운터는 funnel 단조감소를 위해 평가 안 한 시그널도 통과로 셈
