@@ -1,20 +1,126 @@
 # Mint 프로젝트 — 핸드오프 / 결정 기록
 
-> **마지막 업데이트**: 2026-05-22 (Cloud Migration 코드+배포 완료. 5/22~28 GHA 1주 자동 운영 검증 중.)
-> **다음 세션 픽업 시**: `mint/OPERATION_WEEK1.md` **최우선** + 아래 [🔁 다음 세션 픽업 가이드](#-다음-세션-픽업-가이드)
-> **Cursor 변경 이력**: `CURSOR.md` · **Cursor 검토 결과**: `REVIEW_CURSOR.md` · **Cloud 이전 가이드**: `CLOUD_MIGRATION.md` · **사용자 액션 가이드**: `CLOUD_MIGRATION_USER_GUIDE.md` · **1주 운영 플레이북**: `OPERATION_WEEK1.md` · **NASDAQ 확장 인수인계**: `HANDOFF_NASDAQ.md` (별도 세션)
+> **마지막 업데이트**: 2026-05-27 (NASDAQ Stage 1+2+3 완료. KR 1주 검증과 NASDAQ 시범 운영 병행.)
+> **다음 세션 픽업 시**: 아래 [🔁 다음 세션 픽업 가이드](#-다음-세션-픽업-가이드) 최우선 + `mint/HANDOFF_NASDAQ.md`
+> **Cursor 변경 이력**: `CURSOR.md` · **Cursor 검토 결과**: `REVIEW_CURSOR.md` · **Cloud 이전 가이드**: `CLOUD_MIGRATION.md` · **사용자 액션 가이드**: `CLOUD_MIGRATION_USER_GUIDE.md` · **1주 운영 플레이북**: `OPERATION_WEEK1.md` · **NASDAQ 확장 인수인계**: `HANDOFF_NASDAQ.md`
 
 ---
 
-## 🔁 다음 세션 픽업 가이드 (2026-05-29 이후, 1주 운영 결과 수렴 후)
+## 🔁 다음 세션 픽업 가이드 (2026-05-27 이후 — KR + NASDAQ 양면 운영)
 
 ### 한 줄 요약
-**Cloud Migration 코드(`b7afcc1`, `4fb61ec`) + 배포(`649c4cd`) 완료. Neon Postgres + GHA cron 4개 + Streamlit Cloud 가동. 5/22~5/28 1주 검증 운영 진행 중. 결과/관찰/이슈는 `OPERATION_WEEK1.md` 참고. 다음 세션 첫 행동도 거기 명시.**
+**KOSPI/KOSDAQ Cloud Migration + NASDAQ Stage 1+2+3 완료. 양면 자동 운영 진입 단계.**
+- KR: Cloud Migration (`b7afcc1`, `4fb61ec`, `649c4cd`) 완료, 5/22~28 1주 검증 진행 중
+- NASDAQ: Stage 1 인프라 (`9311065`) + Stage 2 ML 학습 (`e8d793c`) + Stage 3 백테스트 (`d77d7e4`) 완료. GHA scan-us cron 활성화 (KST 22:30~05:50)
 
-### 첫 행동
-**`mint/OPERATION_WEEK1.md` 끝의 「📌 다음 세션 픽업」 섹션 절차 그대로 실행.** 1주 운영 데이터 + 사용자 피드백 → 우선순위 결정 분기.
+### 첫 행동 (3가지 시나리오)
 
-### 5/21~22 작업 요약 (현재 운영 상태)
+**A) 사용자가 신규 요구사항을 가지고 옴**
+1. 요구사항을 KR / NASDAQ / 공통 / 인프라로 분류
+2. 작업량 추정 (<30분 즉시 / 30분~2h 분해 / 2h+ Stage 분해)
+3. 사용자 결정 필요 사안은 `AskUserQuestion`으로 합의 후 시작
+4. 「⚙️ 변경 금지 사항」 (아래) 위반 시 사용자 명시 합의 필요
+
+**B) 운영 결과 점검 (1주 누적 후)**
+- KR (5/29 이후): `mint/OPERATION_WEEK1.md` 끝 「📌 다음 세션 픽업」 절차
+- NASDAQ (6/3 이후): outcome 누적 후 재학습 검토 (현재 AUC 0.553 → 도약 기대)
+
+**C) 카드 진행 (사용자 신규 요구사항 없을 때)**
+- 「다음 카드 우선순위」 (아래) 참조
+
+### ⚙️ 변경 금지 사항 (KR + NASDAQ 양 운영 보호)
+| 영역 | 보호 대상 | 변경 조건 |
+|---|---|---|
+| ML 모델 | `mint_lgbm.joblib` (KR), `mint_lgbm_us.joblib` (US) | 재학습 시 사용자 합의 + 별도 commit |
+| DB 스키마 | `portfolio/db.py` | backwards-compatible 변경만 (ALTER ADD COLUMN OK, DROP은 사용자 합의) |
+| GHA workflow | `scan-kr.yml`, `scan-us.yml`, `daily-summary.yml`, `outcomes.yml` | env / cron 변경 시 사용자 명시 합의 |
+| 운영 임계값 | KR ML 0.60 / US ML 0.55 / KR 분봉 ON / US 분봉 OFF | 사용자 결정 사안 — 변경 시 명시 합의 |
+| 라벨 정의 | KR 24h +3% / NASDAQ 24h +2% | 재학습 동기와 함께 사용자 합의 |
+| Risk/Trade 제한 | `max_position_pct=20%`, `max_daily_buys=5` | 사용자 결정 — 변경 시 합의 |
+
+### 👤 사용자 보류 액션 (항상 추적·noti)
+| # | Action | 시기 | 비고 |
+|---|---|---|---|
+| 1 | **Alpaca 가입 + 키 발급** (Stage 2.5 NASDAQ 분봉) | 분봉 룰 도입 결정 시 | 사용자 (3) 결정 |
+| 2 | **카카오페이증권 해외주식 매매 환경** 확인 (FX/수수료/거래시간) | NASDAQ 첫 실 매수 전 | 사용자 (a) 결정 |
+| 3 | **카톡 새벽 알림 수면 영향** 검토 | NASDAQ 1주 시범 운영 중 | silent 시간대 옵션 검토 |
+| 4 | **NASDAQ 1주 시범 outcome 확인** | ~2026-06-03 | get_outcome_stats(7) |
+| 5 | **카카오 refresh_token 만료 대비** (5/18 발급 → 7월 중순) | 7월 초 | `python mint/notifier/setup_kakao.py` 재실행 |
+| 6 | **Windows 작업 스케줄러 Disable** | 5/28+ KR 검증 종료 후 | GHA 안정 확인 시 |
+
+### 📊 운영 컴포넌트 (KR + NASDAQ 양면)
+| 컴포넌트 | 트리거 | 무엇 | 상태 |
+|---|---|---|---|
+| Neon Postgres | 24/7 | DB | ✅ |
+| scan-kr | 평일 KST 09:00~15:50 (UTC `*/10 0-6 * * 1-5`) | KOSPI/KOSDAQ 200종 룰+ML+분봉 | ✅ 1주 검증 중 (5/22~28) |
+| scan-us | 평일 KST 22:30~05:50 (UTC `*/10 13-21 * * 1-5`) | NASDAQ 171종 룰+ML (분봉 OFF) | ✅ 5/27 활성화 |
+| daily-summary | 평일 KST 15:35 | outcome 평가 + 카톡 일일 요약 | ✅ |
+| outcomes | 평일 KST 23:30 | 24h 경과 outcome 평가 | ✅ |
+| Streamlit Cloud | 24/7 | 대시보드 (KR + NASDAQ regime 3개 카드) | ✅ |
+| Windows 스케줄러 | backup | 5/28+ Disable 예정 | ⏳ |
+
+### 🎯 운영 임계값 / 학습 결과 baseline
+| 시장 | 모델 | AUC | 임계값 | Precision | 일평균 |
+|---|---|---|---|---|---|
+| KR (5/19c) | `mint_lgbm.joblib` (200×730d, 24h +3%) | 0.582 | 0.60 | 0.79 | 1.3건 |
+| NASDAQ (exp3) | `mint_lgbm_us.joblib` (171×730d, 24h +2%) | 0.553 | 0.55 | 0.636 | 0.22건 |
+| NASDAQ 백테스트 | 730일 sliding | — | 0.55 | 84.4% win | 0.18건/일 (월 5.4) |
+
+### 다음 카드 우선순위 (1주 운영 + 사용자 요구사항 수렴 후 결정)
+1. **NASDAQ outcome 30건+ 누적 → 재학습** (KR 5/17→5/19c 패턴 따라 도약 가능)
+2. **Stage 2.5 NASDAQ Alpaca 분봉** (사용자 Action 1 후) — KR 동급 정밀도 회복 핵심
+3. **KR outcome 30건+ → 카드 m 재학습** (regime feature + dynamic exit 라벨)
+4. **카드 N — Dynamic Exit calibration** (REGIME_MULT grid search, outcome 20건+ 후)
+5. **카드 D — 페이퍼 트레이딩 인프라** (ML 0.79 vs live 검증)
+6. **P1 — 시장 지수 표시 오류** ([data/market_index.py](data/market_index.py) Naver 파싱) — 작업량 1~2h
+7. **Step 8 — Windows 작업 스케줄러 Disable** (사용자 Action 6)
+
+### 📝 신규 요구사항 진행 패턴
+```
+1. 요구사항 분류 (KR / NASDAQ / 공통 / 인프라)
+2. 작업 분해 + 우선순위
+3. 사용자 결정 필요 사안 AskUserQuestion으로 합의
+4. 「변경 금지 사항」 위반 시 사용자 명시 합의
+5. Stage 별 commit (commit message 패턴 준수)
+6. 작업 완료 후 CLAUDE.md「사용자 결정」「학습 결과」갱신
+7. 사용자 Action 발생 시 「사용자 보류 액션」 표에 추가 + noti
+```
+
+### Commit message 패턴
+- `feat(kr): ...` / `feat(us): ...` — 신규 기능
+- `feat(kr,ml): ...` / `feat(us,ml): ...` — ML 관련
+- `feat(kr,gha): ...` / `feat(us,gha): ...` — workflow
+- `fix(...) / docs(...) / refactor(...)` — 의미 그대로
+
+---
+
+## 📦 NASDAQ 완료 작업 요약 (5/26~27, 3 commits)
+
+**`9311065` Stage 1 — 인프라**:
+- `data/universe.py`: Wikipedia NASDAQ-100 동적 워치리스트 (24h 캐시)
+- `engine/market_regime.py`: ^IXIC 매핑, `regimes_line(markets)` 확장
+- `engine/signals/rule_scanner.py`: dynamic exit NASDAQ 분기 (SUPPORTED_REGIME_MARKETS)
+- `portfolio/db.py`: `_evaluate_single_outcome` NASDAQ 분기 (us_client)
+- `notifier/__init__.py`: `_format_price(value, market)` helper, currency 분기
+- `dashboard/app.py`: regime 3개 카드 + 시그널 currency
+- `.github/workflows/scan-us.yml`: env 정비 (cron은 주석 유지)
+
+**`e8d793c` Stage 2 — ML 학습 + GHA 활성화**:
+- 4회 실험: exp1(100종 24h+3%, AUC 0.544) → exp2(171종 +3%, AUC 0.545) → **exp3(171종 24h+2%, AUC 0.553, best_iter 31) 채택** → exp4(171종 48h+3%, AUC 0.545 미채택)
+- `engine/models/lgbm.py`: MODEL_PATHS, `model_path_for_market()`, `get_cached_model(market=)`
+- `engine/training.py`: `target_return/stop_loss` override, NASDAQ-only 학습 시 us 경로 자동
+- `engine/signals/rule_scanner.py`: `_ml_probability(df, market)` 시장 분기
+- `mint/data/models/mint_lgbm_us.joblib` (93KB) repo 포함
+- `scan-us.yml` schedule 활성화 (`*/10 13-21 * * 1-5` UTC)
+
+**`d77d7e4` Stage 3 — 백테스트**:
+- NASDAQ 171종목 730일 백테스트: 135건 시그널, 승률 84.4%, 평균 +1.77%, σ 2.43%
+- Exit 분포: TIME 83% / TARGET 10% / STOP 7%
+- Val 영역(2026-02~05, 16건)만 보면 75%, +0.7% (표본 작음)
+
+---
+
+## 5/21~22 작업 요약 (KR Cloud Migration 운영 상태)
 
 **5/21 진단 픽스 (`aaae6e7`)**:
 - TZ 비교 버그 픽스, Universe 정적 폴백 → default 200, Risk 게이트 30→45
