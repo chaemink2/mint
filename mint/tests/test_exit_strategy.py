@@ -1,14 +1,16 @@
 """Exit strategy unit tests (no network — current_price 주입)."""
-from datetime import datetime, timedelta
+from datetime import timedelta
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from config.tz import now_kst
 from engine.signals.exit_strategy import evaluate_position
 
 
 def _pos(buy_price=10000, target=10350, stop=9800, bought_minutes_ago=60):
+    # buy_time은 KST tz-aware ISO (2026-05-27 KST 통일 후 신규 저장 형식)
     return {
         "id": 1,
         "ticker": "005930",
@@ -17,7 +19,7 @@ def _pos(buy_price=10000, target=10350, stop=9800, bought_minutes_ago=60):
         "buy_price": buy_price,
         "target_price": target,
         "stop_loss": stop,
-        "buy_time": (datetime.now() - timedelta(minutes=bought_minutes_ago)).isoformat(),
+        "buy_time": (now_kst() - timedelta(minutes=bought_minutes_ago)).isoformat(),
         "quantity": 10,
         "remaining_qty": 10,
     }

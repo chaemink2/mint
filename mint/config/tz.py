@@ -32,6 +32,15 @@ def now_kst() -> datetime:
     return datetime.now(tz=KST)
 
 
+def now_kst_iso() -> str:
+    """현재 KST 시각을 ISO 8601 문자열로 (+09:00 포함).
+
+    2026-05-27 신규 timestamp 저장 표준 — 모든 datetime.now().isoformat() 대체.
+    환경(GHA UTC vs 로컬 KST) 무관하게 KST 시각이 저장됨.
+    """
+    return now_kst().isoformat()
+
+
 def today_kst() -> str:
     """오늘 KST 날짜 'YYYY-MM-DD'."""
     return now_kst().strftime("%Y-%m-%d")

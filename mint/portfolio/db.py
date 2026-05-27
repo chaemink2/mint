@@ -15,6 +15,7 @@ from sqlalchemy import create_engine, text, bindparam, event
 from sqlalchemy.engine import Engine
 
 from config.settings import config
+from config.tz import now_kst, now_kst_iso, to_kst
 
 log = logging.getLogger("mint.db")
 
@@ -290,7 +291,7 @@ def log_signal(
                 "stop_price": stop_price,
                 "status": "active",
                 "valid_until": valid_until,
-                "created_at": datetime.now().isoformat(),
+                "created_at": now_kst_iso(),
                 "max_hold_hours": max_hold_hours,
                 "regime_label": regime_label,
             },
@@ -299,7 +300,7 @@ def log_signal(
 
 
 def get_active_signals(limit: int = 50) -> List[Dict]:
-    now = datetime.now().isoformat()
+    now = now_kst_iso()
     with get_conn() as conn:
         rows = conn.execute(
             text("""SELECT * FROM signals
@@ -309,6 +310,65 @@ def get_active_signals(limit: int = 50) -> List[Dict]:
             {"now": now, "lim": limit},
         ).fetchall()
         return _rows_to_dicts(rows)
+
+
+def get_signals_in_hold_window(limit: int = 100) -> List[Dict]:
+    """추천 시간(max_hold_hours)이 아직 지나지 않은 BUY 시그널 — 매수 적기(active)와
+    보유 윈도우(TIME 만료지만 max_hold 안) 합집합.
+
+    제외: 가격 만료(TARGET_HIT/STOP_HIT — 이미 win/loss 판가름), acted(매수 완료).
+
+    각 row에 'window_state' 추가:
+      'fresh' = 매수 적기 (status=active, valid_until > now)
+      'hold'  = 보유 윈도우 (TIME 만료지만 created_at + max_hold_hours > now)
+
+    2026-05-27: 사용자 요구사항 — '추천 시간이 지나지 않은 종목들은 모두 보여지게'.
+    기존 get_active_signals는 valid_until(30분)만 봐서 매수 적기만 반환했음.
+
+    timestamp 비교는 KST 기준 (2026-05-27 KST 통일). 기존 데이터(tz-naive)와 섞이는
+    기간에는 ISO 문자열 비교가 일시적으로 어긋날 수 있음.
+    """
+    now = now_kst()
+    # 가장 긴 max_hold_hours 추정 — NASDAQ BULL≈30h. 안전하게 72h 가져와 Python 필터.
+    since = (now - timedelta(hours=72)).isoformat()
+    with get_conn() as conn:
+        rows = conn.execute(
+            text("""SELECT * FROM signals
+               WHERE signal_type = 'BUY' AND created_at >= :since
+                 AND (status = 'active'
+                      OR (status = 'expired' AND COALESCE(expiry_reason,'TIME') = 'TIME'))
+               ORDER BY created_at DESC LIMIT :lim"""),
+            {"since": since, "lim": limit},
+        ).fetchall()
+        items = _rows_to_dicts(rows)
+
+    default_hold_h = float(config.signal.max_hold_hours)
+    result: List[Dict] = []
+    for s in items:
+        try:
+            # KST 정규화 — tz-naive(기존)는 to_kst가 UTC로 가정(GHA 환경).
+            # 2026-05-27 신규 데이터는 KST tz-aware로 저장됨.
+            created = to_kst(datetime.fromisoformat(s["created_at"]))
+        except Exception:
+            continue
+        hold_h = float(s.get("max_hold_hours") or default_hold_h)
+        if created + timedelta(hours=hold_h) <= now:
+            continue
+        # 매수 적기 여부 — active 이고 valid_until 안 지났을 때만
+        is_fresh = False
+        if s.get("status") == "active":
+            valid_until = s.get("valid_until")
+            if valid_until:
+                try:
+                    is_fresh = to_kst(datetime.fromisoformat(valid_until)) > now
+                except Exception:
+                    pass
+        s["window_state"] = "fresh" if is_fresh else "hold"
+        # 잔여 시간 계산 (hold 윈도우 기준)
+        remaining_h = (created + timedelta(hours=hold_h) - now).total_seconds() / 3600
+        s["window_remaining_hours"] = max(0.0, remaining_h)
+        result.append(s)
+    return result
 
 
 def get_signals_since(since_iso: str, limit: int = 200) -> List[Dict]:
@@ -335,7 +395,7 @@ def get_signal(signal_id: int) -> Optional[Dict]:
 
 
 def has_recent_signal(ticker: str, signal_type: str, hours: int = 4) -> bool:
-    since = (datetime.now() - timedelta(hours=hours)).isoformat()
+    since = (now_kst() - timedelta(hours=hours)).isoformat()
     with get_conn() as conn:
         row = conn.execute(
             text("""SELECT 1 FROM signals
@@ -348,7 +408,7 @@ def has_recent_signal(ticker: str, signal_type: str, hours: int = 4) -> bool:
 
 def expire_stale_signals() -> int:
     """시간 만료된 active 시그널을 expired로. 만료 사유는 'TIME'."""
-    now = datetime.now().isoformat()
+    now = now_kst_iso()
     with get_conn() as conn:
         result = conn.execute(
             text("""UPDATE signals
@@ -543,7 +603,7 @@ def evaluate_pending_outcomes(limit: int = 50) -> int:
                     "o": result["outcome"],
                     "omax": result["outcome_max"],
                     "omin": result["outcome_min"],
-                    "ea": datetime.now().isoformat(),
+                    "ea": now_kst_iso(),
                     "id": sig["id"],
                 },
             )
@@ -553,7 +613,7 @@ def evaluate_pending_outcomes(limit: int = 50) -> int:
 
 def get_outcome_stats(days: int = 30) -> dict:
     """최근 days일 시그널의 outcome 분포 + win rate."""
-    since = (datetime.now() - timedelta(days=days)).isoformat()
+    since = (now_kst() - timedelta(days=days)).isoformat()
     with get_conn() as conn:
         rows = conn.execute(
             text("""SELECT outcome, COUNT(*) as n FROM signals
@@ -614,7 +674,7 @@ def open_position_from_signal(
     max_hold = sig.get("max_hold_hours") or float(config.signal.max_hold_hours)
     regime = sig.get("regime_label")
     currency = "KRW" if sig["market"] in ("KOSPI", "KOSDAQ") else "USD"
-    now = datetime.now().isoformat()
+    now = now_kst_iso()
 
     with get_conn() as conn:
         result = conn.execute(
@@ -696,10 +756,11 @@ def close_position_partial(
         buy_price = pos["buy_price"]
         profit_pct = (sell_price / buy_price - 1) * 100
         profit_loss = (sell_price - buy_price) * qty - fee
-        buy_time = datetime.fromisoformat(pos["buy_time"])
-        hold_hours = (datetime.now() - buy_time).total_seconds() / 3600
+        # KST 정규화 — tz-naive(기존) + tz-aware(신규) 혼합 비교 대응
+        buy_time = to_kst(datetime.fromisoformat(pos["buy_time"]))
+        hold_hours = (now_kst() - buy_time).total_seconds() / 3600
         amount = sell_price * qty
-        now = datetime.now().isoformat()
+        now = now_kst_iso()
 
         conn.execute(
             text("""INSERT INTO trades
@@ -811,7 +872,7 @@ def save_auth_token(
     expires_at: Optional[str] = None,
     refresh_expires_at: Optional[str] = None,
 ) -> None:
-    now = datetime.now().isoformat()
+    now = now_kst_iso()
     with get_conn() as conn:
         # UPSERT: sqlite/postgres 모두 ON CONFLICT 지원 (sqlite 3.24+, postgres 9.5+)
         conn.execute(
@@ -845,7 +906,7 @@ def get_app_state(key: str) -> Optional[str]:
 
 
 def set_app_state(key: str, value: str) -> None:
-    now = datetime.now().isoformat()
+    now = now_kst_iso()
     with get_conn() as conn:
         conn.execute(
             text("""INSERT INTO app_state (key, value, updated_at)

@@ -1,6 +1,6 @@
 # Mint 프로젝트 — 핸드오프 / 결정 기록
 
-> **마지막 업데이트**: 2026-05-27 (NASDAQ Stage 1+2+3 완료. KR 1주 검증과 NASDAQ 시범 운영 병행.)
+> **마지막 업데이트**: 2026-05-27 (NASDAQ Stage 1+2+3 + UX 패치: 카톡 가로채기 fix · hold window 표시 · KST 통일.)
 > **다음 세션 픽업 시**: 아래 [🔁 다음 세션 픽업 가이드](#-다음-세션-픽업-가이드) 최우선 + `mint/HANDOFF_NASDAQ.md`
 > **Cursor 변경 이력**: `CURSOR.md` · **Cursor 검토 결과**: `REVIEW_CURSOR.md` · **Cloud 이전 가이드**: `CLOUD_MIGRATION.md` · **사용자 액션 가이드**: `CLOUD_MIGRATION_USER_GUIDE.md` · **1주 운영 플레이북**: `OPERATION_WEEK1.md` · **NASDAQ 확장 인수인계**: `HANDOFF_NASDAQ.md`
 
@@ -481,6 +481,9 @@ mint/
 | 2026-05-26 | **NASDAQ ML 라벨 사안 (B)**: KR 24h +3% 동일 라벨로 AUC 0.545 무변화 → **24h +2%/-2%로 변경**. AUC 0.553 best_iter 31 (운영 가능 수준). KR과 비교 가능성 일부 손실 인정. | 학습결과 NASDAQ exp3 |
 | 2026-05-27 | **NASDAQ Stage 2 완료**: `mint_lgbm_us.joblib` (24h +2% exp3 모델 채택). 임계값 0.55 운영 (precision 0.636 · 일평균 0.22건). 48h +3% 비교실험은 미채택. | [engine/models/lgbm.py:MODEL_PATHS](engine/models/lgbm.py) |
 | 2026-05-27 | **scan-us.yml schedule 활성화**: `*/10 13-21 * * 1-5` UTC (NY 정규장 DST/비DST 모두 커버). ML 활성화·분봉 OFF (Alpaca 미도입). | [.github/workflows/scan-us.yml](.github/workflows/scan-us.yml) |
+| 2026-05-27 | **카톡 가로채기 fix**: dashboard `_run_scan`이 `_notify_buys` 누락 → 다른 사용자가 대시보드에서 트리거한 시그널이 카톡 발송 없이 DB만 채워서 `has_recent_signal(4h)`이 본인 GHA scan을 차단했음. main.py cmd_scan과 동일 흐름(만료 처리 + 카톡)으로 통일. catch-up 버튼도 동일 fix. | [dashboard/app.py:_run_scan](mint/dashboard/app.py) |
+| 2026-05-27 | **추천 시그널 페이지 hold window 표시**: `valid_until`(30분)만 보던 `get_active_signals` 대신 `get_signals_in_hold_window` 신설 — `max_hold_hours` 안 시그널 모두. 매수 적기(fresh, ≤30분) vs 보유 윈도우(hold, ≤max_hold_hours) 두 카테고리로 구분 표시 + 메인 대시보드에 종목명 리스트. 가격 만료(TARGET_HIT/STOP_HIT)·acted는 제외. | [portfolio/db.py:get_signals_in_hold_window](mint/portfolio/db.py), [dashboard/app.py](mint/dashboard/app.py) |
+| 2026-05-27 | **타임스탬프 KST 통일**: 신규 timestamp 저장은 모두 `now_kst().isoformat()` (+09:00 포함). config/tz.py에 `now_kst_iso()` helper. portfolio/db.py·rule_scanner·exit_strategy·kis_client·notifier/kakao·dashboard·main 모든 호출지. 기존 데이터(tz-naive)와 비교 시 `to_kst()` 정규화. 운영 임계값·라벨·모델은 무변경 (변경 금지 사항 보호). | [config/tz.py](mint/config/tz.py) |
 
 ---
 

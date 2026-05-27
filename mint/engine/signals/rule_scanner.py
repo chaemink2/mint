@@ -282,8 +282,9 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
             stats["skipped_dedup"] += 1
             continue
 
+        from config.tz import now_kst
         valid_until = (
-            datetime.now() + timedelta(minutes=config.ops.signal_valid_minutes)
+            now_kst() + timedelta(minutes=config.ops.signal_valid_minutes)
         ).isoformat()
 
         sid = db.log_signal(

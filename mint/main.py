@@ -39,9 +39,10 @@ log = logging.getLogger("mint.main")
 
 
 def _setup_log_file():
+    from config.tz import now_kst
     os.makedirs(config.log_path, exist_ok=True)
     fh = logging.FileHandler(
-        os.path.join(config.log_path, f"mint_{datetime.now().strftime('%Y%m%d')}.log"),
+        os.path.join(config.log_path, f"mint_{now_kst().strftime('%Y%m%d')}.log"),
         encoding="utf-8",
     )
     fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))

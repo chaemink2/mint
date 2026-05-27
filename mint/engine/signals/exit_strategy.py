@@ -73,8 +73,10 @@ def evaluate_position(position: dict, current_price: Optional[float] = None) -> 
     buy_price = float(position["buy_price"])
     target = float(position.get("target_price") or 0) or buy_price * (1 + config.signal.target_return)
     stop = float(position.get("stop_loss") or 0) or buy_price * (1 + config.signal.stop_loss)
-    buy_time = datetime.fromisoformat(position["buy_time"])
-    hold_hours = (datetime.now() - buy_time).total_seconds() / 3600
+    from config.tz import now_kst, to_kst
+    # KST 정규화 — tz-naive(기존) + tz-aware(2026-05-27~) 혼합 비교 대응
+    buy_time = to_kst(datetime.fromisoformat(position["buy_time"]))
+    hold_hours = (now_kst() - buy_time).total_seconds() / 3600
 
     price = current_price if current_price is not None else _latest_price(ticker, market)
     if price is None or price <= 0:

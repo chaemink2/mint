@@ -54,9 +54,11 @@ def _load_cached_token() -> Optional[dict]:
         row = get_auth_token("kis")
     except Exception:
         row = None
+    from config.tz import now_kst, to_kst
     if row and row.get("access_token") and row.get("expires_at"):
         try:
-            if datetime.fromisoformat(row["expires_at"]) > datetime.now():
+            # KST 정규화 — tz-naive(기존)는 to_kst가 UTC로 가정.
+            if to_kst(datetime.fromisoformat(row["expires_at"])) > now_kst():
                 return {"access_token": row["access_token"], "expires_at": row["expires_at"]}
         except Exception:
             pass
@@ -68,7 +70,7 @@ def _load_cached_token() -> Optional[dict]:
             data = json.load(f)
         if not data.get("expires_at"):
             return None
-        if datetime.fromisoformat(data["expires_at"]) <= datetime.now():
+        if to_kst(datetime.fromisoformat(data["expires_at"])) <= now_kst():
             return None
         # 1회 마이그레이션
         try:
@@ -83,7 +85,8 @@ def _load_cached_token() -> Optional[dict]:
 
 
 def _save_cached_token(token: str, expires_in_sec: int) -> None:
-    expires_at = (datetime.now() + timedelta(seconds=max(0, expires_in_sec - 300))).isoformat()
+    from config.tz import now_kst
+    expires_at = (now_kst() + timedelta(seconds=max(0, expires_in_sec - 300))).isoformat()
     try:
         from portfolio.db import save_auth_token, DATABASE_URL as _DB_URL
         save_auth_token("kis", access_token=token, expires_at=expires_at)

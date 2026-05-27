@@ -67,12 +67,14 @@ class KakaoTokenSet:
 
     @classmethod
     def from_dict(cls, d: dict) -> "KakaoTokenSet":
+        from config.tz import to_kst
+        # KST 정규화 — tz-naive(기존)와 tz-aware(신규) 혼합 비교 대응
         return cls(
             access_token=d["access_token"],
             refresh_token=d["refresh_token"],
-            expires_at=datetime.fromisoformat(d["expires_at"]),
+            expires_at=to_kst(datetime.fromisoformat(d["expires_at"])),
             refresh_expires_at=(
-                datetime.fromisoformat(d["refresh_expires_at"])
+                to_kst(datetime.fromisoformat(d["refresh_expires_at"]))
                 if d.get("refresh_expires_at") else None
             ),
         )
@@ -149,7 +151,9 @@ def _save_tokens(tokens: KakaoTokenSet) -> None:
 
 
 def _now() -> datetime:
-    return datetime.now()
+    """KST tz-aware now (2026-05-27 KST 통일)."""
+    from config.tz import now_kst
+    return now_kst()
 
 
 def is_configured() -> bool:
