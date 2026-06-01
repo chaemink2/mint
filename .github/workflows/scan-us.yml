@@ -17,7 +17,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -38,10 +38,16 @@ jobs:
           # Stage 2 학습 완료 — ML 활성화. NASDAQ 모델 confidence p99=0.556이라
           # 임계값 0.55가 실 운영선 (0.60 이상은 사실상 0건). KR 0.60과 다름.
           MINT_USE_ML_CONFIDENCE:    'true'
-          MINT_USE_MINUTE_RULE:      'false'   # Alpaca 도입 (Stage 2.5) 전 OFF
+          MINT_USE_MINUTE_RULE:      'false'   # 1차 발견은 minute_first(아래) 사용
           MINT_MIN_ML_CONFIDENCE:    '0.55'
-          MINT_WATCHLIST_SIZE:       '300'    # NASDAQ-100 + S&P NASDAQ 합쳐 ~171
+          # 2026-06-01: 171 → 500 (NASDAQ-100 + S&P 500/400/600 NASDAQ-listed cascade).
+          # KR 600 풀에 대응. 캐시 24h.
+          MINT_WATCHLIST_SIZE:       '500'
           MINT_MAX_RISK_SCORE:       '45'
           MINT_MAX_DAILY_BUYS:       '30'
           MINT_US_SCAN:              'true'
+          # 2026-06-01: 분봉 1차 발견 모드 활성 (yfinance 5m 5d).
+          # 500종목 × yfinance fetch ~8~13분/cron. timeout 25분 안에 충분.
+          # 강한 패턴 (spike2.5 + breakout + accel + 양봉) 통과 후 일봉 risk + ML 보조.
+          MINT_MINUTE_FIRST:         'true'
         run: python -X utf8 mint/main.py scan-us

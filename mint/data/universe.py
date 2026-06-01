@@ -148,39 +148,36 @@ def _fetch_top_n_kr(market: str, n: int) -> List[str]:
 
 _NASDAQ100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
 _SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+_SP400_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"  # mid-cap
+_SP600_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies"  # small-cap
 
 
-def _fetch_sp500_nasdaq_listed() -> List[str]:
-    """S&P 500 Wikipedia 페이지에서 NASDAQ-listed 종목만 추출.
+def _fetch_sp_nasdaq_listed(url: str, label: str) -> List[str]:
+    """S&P 500/400/600 Wikipedia 페이지에서 NASDAQ-listed 종목만 추출.
 
-    표 구조: <td><a href="https://www.nasdaq.com/...">TICKER</a></td> (NASDAQ)
-            <td><a href="https://www.nyse.com/...">TICKER</a></td>   (NYSE)
-
-    NASDAQ 호스트만 필터 → S&P 500 ∩ NASDAQ listing.
+    표 구조 동일: <td><a href="https://www.nasdaq.com/...">TICKER</a></td>
+    NASDAQ exchange URL 필터로 NASDAQ-listed만 골라냄.
     """
     try:
         import requests
     except ImportError:
         return []
     try:
-        r = requests.get(_SP500_URL,
-                         headers={"User-Agent": _NAVER_UA}, timeout=15)
+        r = requests.get(url, headers={"User-Agent": _NAVER_UA}, timeout=15)
         if r.status_code != 200:
-            log.warning("Wikipedia S&P500 status=%d", r.status_code)
+            log.warning("Wikipedia %s status=%d", label, r.status_code)
             return []
     except Exception as e:
-        log.warning("Wikipedia S&P500 fetch failed: %s", e)
+        log.warning("Wikipedia %s fetch failed: %s", label, e)
         return []
 
     html = r.text
-    # constituents 표만 자르기
     table_idx = html.find('id="constituents"')
     if table_idx == -1:
         return []
     table_end = html.find('</table>', table_idx)
     table_html = html[table_idx:table_end] if table_end > 0 else html[table_idx:]
 
-    # NASDAQ exchange URL 패턴
     candidates = re.findall(
         r'<a rel="nofollow" class="external text" href="https://www\.nasdaq\.com/[^"]+">([A-Z][A-Z\.\-]{0,5})</a>',
         table_html,
@@ -194,6 +191,11 @@ def _fetch_sp500_nasdaq_listed() -> List[str]:
         seen.add(sym)
         tickers.append(sym)
     return tickers
+
+
+def _fetch_sp500_nasdaq_listed() -> List[str]:
+    """S&P 500 NASDAQ-listed (역호환 wrapper)."""
+    return _fetch_sp_nasdaq_listed(_SP500_URL, "S&P500")
 
 
 def _fetch_top_n_nasdaq_wikipedia(n: int) -> List[str]:
@@ -286,19 +288,31 @@ def _fetch_top_n_nasdaq_wikipedia(n: int) -> List[str]:
     if n <= 100:
         return tickers[:n]
 
-    # n > 100이면 S&P 500 NASDAQ-listed 추가 (dedup)
-    log.info("NASDAQ-100 %d 종목 + S&P500 NASDAQ-listed 추가 fetch (목표 n=%d)...",
+    # n > 100이면 S&P 500/400/600 NASDAQ-listed 추가 (dedup)
+    # 2026-06-01: 500/400/600 cascade로 ~500 종목 도달 가능 (이전 500만 → 171)
+    log.info("NASDAQ-100 %d + S&P 500/400/600 NASDAQ-listed cascade (목표 n=%d)...",
              len(tickers), n)
-    sp_nasdaq = _fetch_sp500_nasdaq_listed()
     seen = set(tickers)
-    added = 0
-    for t in sp_nasdaq:
-        if t in seen:
-            continue
-        seen.add(t)
-        tickers.append(t)
-        added += 1
-    log.info("S&P500에서 추가 %d 종목 (총 %d 종목)", added, len(tickers))
+
+    for url, label in [
+        (_SP500_URL, "S&P500"),
+        (_SP400_URL, "S&P400"),
+        (_SP600_URL, "S&P600"),
+    ]:
+        if len(tickers) >= n:
+            break
+        sp_list = _fetch_sp_nasdaq_listed(url, label)
+        added = 0
+        for t in sp_list:
+            if t in seen:
+                continue
+            seen.add(t)
+            tickers.append(t)
+            added += 1
+            if len(tickers) >= n:
+                break
+        log.info("%s에서 추가 %d 종목 (누적 %d)", label, added, len(tickers))
+
     return tickers[:n]
 
 

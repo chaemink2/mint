@@ -160,11 +160,20 @@ def evaluate_minute_first_discovery(bars: pd.DataFrame) -> Optional[dict]:
     return None
 
 
-def fetch_and_discover(ticker: str) -> Optional[dict]:
-    """분봉 1차 발견: KIS 분봉 fetch + evaluate_minute_first_discovery."""
-    from data import kis_client
+def fetch_and_discover(ticker: str, market: str = "KOSPI") -> Optional[dict]:
+    """분봉 1차 발견: 시장별 분봉 fetch + evaluate_minute_first_discovery.
 
-    bars = kis_client.get_minute_bars(ticker)
+    - KOSPI/KOSDAQ → KIS get_minute_bars (KIS_APP_KEY 필요)
+    - NASDAQ → yfinance get_minute_bars (5분봉, period 5d)
+    """
+    if market in ("KOSPI", "KOSDAQ"):
+        from data import kis_client
+        bars = kis_client.get_minute_bars(ticker)
+    elif market == "NASDAQ":
+        from data import us_client
+        bars = us_client.get_minute_bars(ticker)
+    else:
+        return None
     if bars is None:
         return None
     return evaluate_minute_first_discovery(bars)

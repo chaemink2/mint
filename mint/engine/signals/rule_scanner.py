@@ -132,9 +132,9 @@ def evaluate_ticker_minute_first(
       3. ML 모델 있으면 추가 검증 (없으면 통과)
 
     분봉 fetch 실패 시 None (이 모드에서는 일봉 fallback 안 함 — 1차가 분봉이라).
-    KR 시장만 동작 (NASDAQ은 KIS 분봉 X — None 반환).
+    KR (KIS) + NASDAQ (yfinance 5m) 지원. 2026-06-01 NASDAQ 확장.
     """
-    if market not in ("KOSPI", "KOSDAQ"):
+    if market not in ("KOSPI", "KOSDAQ", "NASDAQ"):
         return None
     if df is None or len(df) < 25:
         return None
@@ -144,7 +144,7 @@ def evaluate_ticker_minute_first(
 
     # 1. 분봉 1차 발견 — 가장 비싼 호출이라 먼저 게이트
     from engine.signals.minute_rule import fetch_and_discover
-    minute_info = fetch_and_discover(ticker)
+    minute_info = fetch_and_discover(ticker, market=market)
     if minute_info is None:
         return None
     if stats is not None:
@@ -388,9 +388,9 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
         if market not in markets:
             continue
 
-        # 2026-06-01: 분봉 1차 발견 모드 (env MINT_MINUTE_FIRST=true) — KR만.
-        # NASDAQ은 KIS 분봉 미지원 → 기본 일봉 1차 모드로.
-        if config.signal.minute_first and market in ("KOSPI", "KOSDAQ"):
+        # 2026-06-01: 분봉 1차 발견 모드 (env MINT_MINUTE_FIRST=true)
+        # KR (KIS 분봉) + NASDAQ (yfinance 5m 분봉) 지원
+        if config.signal.minute_first and market in ("KOSPI", "KOSDAQ", "NASDAQ"):
             candidate = evaluate_ticker_minute_first(ticker, market, df, stats=stats)
         else:
             candidate = evaluate_ticker(ticker, market, df, stats=stats)

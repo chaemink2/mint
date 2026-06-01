@@ -100,3 +100,66 @@ def fetch_watchlist_bars(
 def get_stock_name(ticker: str) -> str:
     """yfinance info는 무겁고 흔히 실패함 — 일단 ticker 그대로 반환."""
     return ticker
+
+
+def get_minute_bars(
+    ticker: str, interval: str = "5m", period: str = "5d"
+) -> Optional[pd.DataFrame]:
+    """yfinance 분봉 → KIS get_minute_bars와 동일한 컬럼 시그니처.
+
+    interval: '1m'/'2m'/'5m'/'15m'/'30m'/'60m'. yfinance 1m=7d 한도, 5m=60d.
+    period: '1d'/'5d'/'1mo' 등.
+
+    반환: DataFrame[ts, open, high, low, close, volume] (시간 정순) 또는 None.
+
+    KIS 분봉(get_minute_bars)와 동일 인터페이스 — minute_rule.py가 시장 무관
+    동일 평가 함수 (evaluate_minute_first_discovery)를 호출할 수 있게 함.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        log.warning("yfinance not installed — get_minute_bars 불가")
+        return None
+
+    try:
+        raw = yf.download(
+            ticker, interval=interval, period=period,
+            progress=False, auto_adjust=True,
+        )
+    except Exception as e:
+        log.debug("yfinance minute fetch failed for %s: %s", ticker, e)
+        return None
+
+    if raw is None or raw.empty:
+        return None
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = raw.columns.get_level_values(0)
+
+    rename_map = {"Open": "open", "High": "high", "Low": "low",
+                  "Close": "close", "Volume": "volume"}
+    raw = raw.rename(columns=rename_map)
+    for col in ("open", "high", "low", "close", "volume"):
+        if col not in raw.columns:
+            return None
+
+    rows = []
+    for ts, row in raw.iterrows():
+        try:
+            o = float(row["open"])
+            h = float(row["high"])
+            l = float(row["low"])
+            c = float(row["close"])
+            v = float(row["volume"]) if pd.notna(row["volume"]) else 0.0
+        except (TypeError, ValueError):
+            continue
+        if c <= 0:
+            continue
+        rows.append({"ts": str(ts), "open": o, "high": h,
+                     "low": l, "close": c, "volume": v})
+
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows)
+    return df.reset_index(drop=True)
