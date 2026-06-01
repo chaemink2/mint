@@ -91,7 +91,8 @@ class SignalConfig:
     minute_long_window: int = int(os.getenv("MINT_MINUTE_LONG_WINDOW", "20"))
 
     max_position_pct: float = 0.20
-    max_daily_buys: int = 5
+    # 2026-06-01: 5 → 30, 시장별 카운터 분리(rule_scanner). 수동 매매라 사용자가 판단.
+    max_daily_buys: int = int(os.getenv("MINT_MAX_DAILY_BUYS", "30"))
 
 
 def _optional_int(env_name: str) -> Optional[int]:

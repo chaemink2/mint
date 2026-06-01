@@ -1,10 +1,13 @@
 name: Mint KR Scan
 
-# 평일 KST 09:00~15:50 (UTC 00:00~06:50), 10분 간격
-# GHA cron은 UTC 기준 + 지연 가능 (수 분 ~ 수십 분). 일봉 기반이라 영향 작음.
+# 평일 KST 09:00~15:50 (UTC 00:00~06:50)
+# 2026-06-01: 기존 `*/10 0-6 * * 1-5` → 정시/30분 슬롯 2개로 분리.
+# 이전 패턴은 GHA 부하 정책상 하루 2~3회만 실행됨 (5/22~5/29 실측 기준).
+# 정시/30분 슬롯은 GHA가 더 잘 트리거 (다른 워크플로와 충돌 적은 시각).
 on:
   schedule:
-    - cron: '*/10 0-6 * * 1-5'
+    - cron: '0 0-6 * * 1-5'    # KST 매 정시 09~15시
+    - cron: '30 0-6 * * 1-5'   # KST 매 30분 09:30~15:30
   workflow_dispatch: {}
 
 concurrency:
@@ -14,7 +17,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +41,9 @@ jobs:
           MINT_USE_MINUTE_RULE:      'true'
           MINT_MIN_ML_CONFIDENCE:    '0.60'
           MINT_MIN_MINUTE_VOL_SPIKE: '2.0'
-          MINT_WATCHLIST_SIZE:       '200'
+          # 2026-06-01: 200 → 600 (소형주 상한가 catch율 개선).
+          # 캐시 24h라 첫날만 fetch 시간 증가, 이후엔 OHLCV만 ~10분 소요.
+          MINT_WATCHLIST_SIZE:       '600'
           MINT_MAX_RISK_SCORE:       '45'
+          MINT_MAX_DAILY_BUYS:       '30'
         run: python -X utf8 mint/main.py scan

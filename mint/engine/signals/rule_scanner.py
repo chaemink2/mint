@@ -239,20 +239,34 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
     bars_map = fetch_watchlists_by_markets(markets, days=60)
 
     # 오늘 이미 발생한 BUY 카운트 → max_daily_buys 한도
+    # 2026-06-01: 시장별 카운터 분리 — scan-kr는 KR BUY만, scan-us는 NASDAQ BUY만 카운트.
+    # 이전: 전체 BUY 합산. NASDAQ scan-us가 새벽 KST에 한도 채우면 KR scan-kr이 막힘.
     from datetime import datetime as _dt
     from sqlalchemy import text as _text
     # KST 기준 today_start (R1) — GHA UTC에서도 한국 거래일과 정합
     from config.tz import today_kst
     today_start = today_kst() + "T00:00:00"
     with db.get_conn() as conn:
+        # markets in (...) 바인딩 — SQLite/Postgres 양쪽 호환을 위해 IN expand
+        placeholders = ",".join(f":m{i}" for i in range(len(markets)))
+        params = {"start": today_start}
+        for i, m in enumerate(markets):
+            params[f"m{i}"] = m
         today_count = conn.execute(
-            _text("SELECT COUNT(*) FROM signals WHERE signal_type='BUY' AND created_at >= :start"),
-            {"start": today_start},
+            _text(
+                f"SELECT COUNT(*) FROM signals "
+                f"WHERE signal_type='BUY' AND created_at >= :start "
+                f"AND market IN ({placeholders})"
+            ),
+            params,
         ).scalar() or 0
     daily_limit = config.signal.max_daily_buys
     remaining = max(0, daily_limit - today_count)
     if remaining == 0:
-        log.info("Daily BUY limit reached (%d) — skipping new signals", daily_limit)
+        log.info(
+            "Daily BUY limit reached (%d) for markets=%s — skipping new signals",
+            daily_limit, markets,
+        )
         return []
 
     new_ids: List[int] = []

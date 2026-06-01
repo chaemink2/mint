@@ -1,15 +1,13 @@
 name: Mint US Scan (NASDAQ)
 
 # 평일 NY 정규장 = KST 22:30~익일 05:00 (DST: UTC 13:30~20:00 / 비DST: 14:30~21:00).
-# 둘 다 커버하려면 UTC 13-21 (10분 간격). cron 요일은 UTC 기준 월~금.
 #
 # 2026-05-27 활성화: Stage 2 NASDAQ 모델 학습 완료 (mint_lgbm_us.joblib).
-#   - 라벨: 24h +2%/-2% (KR 24h +3%/-2%과 다름. 사용자 (B) 결정, 5/26).
-#   - Val AUC 0.553, 임계값 0.55에서 precision 0.636·일평균 0.22건.
-#   - KR 동급 (precision 0.79) 미달이나 운영 outcome 누적 후 재학습 전제로 시작.
+# 2026-06-01: cron 슬롯 명시 (KR과 동일 이유 — `*/10`은 GHA 부하 정책상 누락 다발).
 on:
   schedule:
-    - cron: '*/10 13-21 * * 1-5'   # NY 정규장 cover (DST/비DST 모두)
+    - cron: '0 13-21 * * 1-5'    # 매 정시
+    - cron: '30 13-21 * * 1-5'   # 매 30분
   workflow_dispatch: {}
 
 concurrency:
@@ -44,5 +42,6 @@ jobs:
           MINT_MIN_ML_CONFIDENCE:    '0.55'
           MINT_WATCHLIST_SIZE:       '300'    # NASDAQ-100 + S&P NASDAQ 합쳐 ~171
           MINT_MAX_RISK_SCORE:       '45'
+          MINT_MAX_DAILY_BUYS:       '30'
           MINT_US_SCAN:              'true'
         run: python -X utf8 mint/main.py scan-us
