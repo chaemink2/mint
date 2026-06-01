@@ -121,6 +121,107 @@ def _ml_probability(df: pd.DataFrame, market: Optional[str] = None) -> Optional[
     return model.predict_proba(feats)
 
 
+def evaluate_ticker_minute_first(
+    ticker: str, market: str, df: pd.DataFrame, stats: Optional[dict] = None
+) -> Optional[dict]:
+    """분봉 1차 발견 모드 — 2026-06-01 신설.
+
+    흐름:
+      1. 분봉 강한 패턴 (vol spike + 신고가 돌파 + 모멘텀 가속 + 양봉) 통과만 후보
+      2. 일봉 보조 필터: risk_score만 (기존 momentum/volume 게이트 X)
+      3. ML 모델 있으면 추가 검증 (없으면 통과)
+
+    분봉 fetch 실패 시 None (이 모드에서는 일봉 fallback 안 함 — 1차가 분봉이라).
+    KR 시장만 동작 (NASDAQ은 KIS 분봉 X — None 반환).
+    """
+    if market not in ("KOSPI", "KOSDAQ"):
+        return None
+    if df is None or len(df) < 25:
+        return None
+
+    if stats is not None:
+        stats["evaluated"] = stats.get("evaluated", 0) + 1
+
+    # 1. 분봉 1차 발견 — 가장 비싼 호출이라 먼저 게이트
+    from engine.signals.minute_rule import fetch_and_discover
+    minute_info = fetch_and_discover(ticker)
+    if minute_info is None:
+        return None
+    if stats is not None:
+        stats["passed_minute"] = stats.get("passed_minute", 0) + 1
+
+    # 2. 일봉 보조 — risk_score만 (NASDAQ regime 무관, KR만이라 KR risk 게이트)
+    sig = config.signal
+    risk = _risk_score(df)
+    ref_price = float(df["close"].iloc[-1])
+    if risk > sig.max_risk_score:
+        return None
+    if stats is not None:
+        stats["passed_risk"] = stats.get("passed_risk", 0) + 1
+
+    # 3. ML 옵션 — 모델 있으면 추가 검증
+    ml_conf = _ml_probability(df, market=market)
+    if ml_conf is not None and ml_conf < sig.min_model_confidence:
+        return None
+    if stats is not None:
+        stats["passed_ml"] = stats.get("passed_ml", 0) + 1
+
+    # momentum/volume은 funnel에서 evaluated와 동일 카운트 (단조감소 보장)
+    if stats is not None:
+        stats["passed_momentum"] = stats.get("passed_momentum", 0) + 1
+        stats["passed_volume"] = stats.get("passed_volume", 0) + 1
+
+    expected = _estimate_expected_return_1d(df)
+    vol_ratio = _volume_ratio(df)
+    rule_conf = _rule_score(df, expected, risk, vol_ratio)
+
+    # Dynamic exit
+    atr_pct = (risk / 500.0) if risk > 0 else 0.02
+    from engine.market_regime import SUPPORTED_REGIME_MARKETS
+    if market in SUPPORTED_REGIME_MARKETS:
+        from engine.market_regime import get_regime_or_sideways
+        from engine.dynamic_exit import compute_dynamic_exit
+        _regime = get_regime_or_sideways(market)
+        _de = compute_dynamic_exit(atr_pct, market, regime=_regime)
+        target_price = ref_price * (1 + _de.target_pct)
+        stop_price = ref_price * (1 + _de.stop_pct)
+        max_hold_hours_val = _de.max_hold_hours
+        regime_label_val = _regime.label
+        dynamic_target_pct = _de.target_pct
+        dynamic_stop_pct = _de.stop_pct
+    else:
+        target_price = ref_price * (1 + sig.target_return)
+        stop_price = ref_price * (1 + sig.stop_loss)
+        max_hold_hours_val = float(sig.max_hold_hours)
+        regime_label_val = None
+        dynamic_target_pct = sig.target_return
+        dynamic_stop_pct = sig.stop_loss
+
+    final_conf = ml_conf if ml_conf is not None else rule_conf
+
+    result = {
+        "ticker": ticker,
+        "market": market,
+        "name": _resolve_name(ticker, market),
+        "expected_return": expected,
+        "risk_score": risk,
+        "model_score": final_conf,
+        "ml_confidence": ml_conf,
+        "rule_confidence": rule_conf,
+        "ref_price": ref_price,
+        "target_price": target_price,
+        "stop_price": stop_price,
+        "volume_ratio": vol_ratio,
+        "max_hold_hours": max_hold_hours_val,
+        "regime_label": regime_label_val,
+        "dynamic_target_pct": dynamic_target_pct,
+        "dynamic_stop_pct": dynamic_stop_pct,
+        "discovery_mode": "minute_first",
+    }
+    result.update(minute_info)
+    return result
+
+
 def evaluate_ticker(
     ticker: str, market: str, df: pd.DataFrame, stats: Optional[dict] = None
 ) -> Optional[dict]:
@@ -287,7 +388,12 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
         if market not in markets:
             continue
 
-        candidate = evaluate_ticker(ticker, market, df, stats=stats)
+        # 2026-06-01: 분봉 1차 발견 모드 (env MINT_MINUTE_FIRST=true) — KR만.
+        # NASDAQ은 KIS 분봉 미지원 → 기본 일봉 1차 모드로.
+        if config.signal.minute_first and market in ("KOSPI", "KOSDAQ"):
+            candidate = evaluate_ticker_minute_first(ticker, market, df, stats=stats)
+        else:
+            candidate = evaluate_ticker(ticker, market, df, stats=stats)
         if not candidate:
             continue
 

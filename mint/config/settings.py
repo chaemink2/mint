@@ -89,6 +89,10 @@ class SignalConfig:
     min_minute_vol_spike: float = float(os.getenv("MINT_MIN_MINUTE_VOL_SPIKE", "3.0"))
     minute_short_window: int = int(os.getenv("MINT_MINUTE_SHORT_WINDOW", "5"))
     minute_long_window: int = int(os.getenv("MINT_MINUTE_LONG_WINDOW", "20"))
+    # 2026-06-01: 분봉 1차 발견 모드 (옵트인). True면 분봉이 1차 게이트가 되고
+    # 일봉은 보조(risk_score)·일봉 ML은 옵션. 상한가/실시간 모멘텀 catch 목적.
+    # KR 시장만 (KIS 분봉). 600종목 × KIS API 호출 → GHA 1cron slot 약 3~10분.
+    minute_first: bool = os.getenv("MINT_MINUTE_FIRST", "false").lower() == "true"
 
     max_position_pct: float = 0.20
     # 2026-06-01: 5 → 30, 시장별 카운터 분리(rule_scanner). 수동 매매라 사용자가 판단.
