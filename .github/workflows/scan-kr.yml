@@ -46,4 +46,8 @@ jobs:
           MINT_WATCHLIST_SIZE:       '600'
           MINT_MAX_RISK_SCORE:       '45'
           MINT_MAX_DAILY_BUYS:       '30'
+          # 2026-06-01: 분봉 1차 발견 모드 활성화 (사용자 결정 — 즉시 검증).
+          # 600종목 KIS 분봉 fetch → 3~10분/cron. 강한 패턴(spike2.5+breakout+
+          # accel+양봉)만 후보 → 일봉 risk + ML 보조 검증. 실패 시 env 라인 제거로 롤백.
+          MINT_MINUTE_FIRST:         'true'
         run: python -X utf8 mint/main.py scan
