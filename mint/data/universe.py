@@ -150,6 +150,7 @@ _NASDAQ100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
 _SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 _SP400_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"  # mid-cap
 _SP600_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies"  # small-cap
+_NASDAQTRADER_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 
 
 def _fetch_sp_nasdaq_listed(url: str, label: str) -> List[str]:
@@ -196,6 +197,65 @@ def _fetch_sp_nasdaq_listed(url: str, label: str) -> List[str]:
 def _fetch_sp500_nasdaq_listed() -> List[str]:
     """S&P 500 NASDAQ-listed (역호환 wrapper)."""
     return _fetch_sp_nasdaq_listed(_SP500_URL, "S&P500")
+
+
+# 파생 증권 / 우선주 / 채권 식별 키워드 (소문자 비교)
+_NASDAQ_NAME_BLOCKLIST = (
+    " - rights", " - unit", " - warrant", "- preferred", " depositary",
+    " notes due", "subordinate", " debenture", "depositary share",
+)
+
+
+def _fetch_nasdaqlisted_common(market_categories: tuple = ("Q", "G")) -> List[str]:
+    """nasdaqtrader.com 공식 nasdaqlisted.txt → 일반 보통주만 필터.
+
+    필터:
+      - Test Issue=N, ETF=N
+      - Market Category in market_categories (기본 Q + G)
+        · Q = NASDAQ Global Select Market (~1291 우량주)
+        · G = NASDAQ Global Market (~676 중간)
+        · S = NASDAQ Capital Market (소형/페니 — 기본 제외)
+      - Security Name에 Rights/Units/Warrants/Preferred/Notes 등 파생 키워드 제외
+
+    반환: ticker 리스트 (알파벳 순). 시총 정렬 X — 후속 필터(가격/거래량)는 운영 단에서.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    try:
+        r = requests.get(
+            _NASDAQTRADER_URL,
+            headers={"User-Agent": _NAVER_UA},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            log.warning("nasdaqtrader %s status=%d", _NASDAQTRADER_URL, r.status_code)
+            return []
+    except Exception as e:
+        log.warning("nasdaqtrader fetch failed: %s", e)
+        return []
+
+    import csv
+    import io
+
+    reader = csv.DictReader(io.StringIO(r.text), delimiter="|")
+    tickers: List[str] = []
+    for row in reader:
+        sym = (row.get("Symbol") or "").strip()
+        if not sym or sym.startswith("File Creation"):
+            continue
+        if row.get("Test Issue") == "Y" or row.get("ETF") == "Y":
+            continue
+        if row.get("Market Category") not in market_categories:
+            continue
+        name = (row.get("Security Name") or "").lower()
+        if any(bad in name for bad in _NASDAQ_NAME_BLOCKLIST):
+            continue
+        # yfinance 호환: '.' → '-' (e.g. BRK.B → BRK-B)
+        tickers.append(sym.replace(".", "-"))
+    return tickers
 
 
 def _fetch_top_n_nasdaq_wikipedia(n: int) -> List[str]:
@@ -288,12 +348,13 @@ def _fetch_top_n_nasdaq_wikipedia(n: int) -> List[str]:
     if n <= 100:
         return tickers[:n]
 
-    # n > 100이면 S&P 500/400/600 NASDAQ-listed 추가 (dedup)
-    # 2026-06-01: 500/400/600 cascade로 ~500 종목 도달 가능 (이전 500만 → 171)
-    log.info("NASDAQ-100 %d + S&P 500/400/600 NASDAQ-listed cascade (목표 n=%d)...",
+    # n > 100이면 S&P 500/400/600 + nasdaqlisted Q/G cascade (dedup)
+    # 2026-06-02: S&P 500까지로 ~500 종목, nasdaqlisted Q/G까지로 1500+ 가능
+    log.info("NASDAQ-100 %d + cascade (S&P 500/400/600 + nasdaqlisted Q/G) 목표 n=%d...",
              len(tickers), n)
     seen = set(tickers)
 
+    # 1순위: S&P 시드 (지수 편입 검증된 우량주)
     for url, label in [
         (_SP500_URL, "S&P500"),
         (_SP400_URL, "S&P400"),
@@ -312,6 +373,22 @@ def _fetch_top_n_nasdaq_wikipedia(n: int) -> List[str]:
             if len(tickers) >= n:
                 break
         log.info("%s에서 추가 %d 종목 (누적 %d)", label, added, len(tickers))
+
+    # 2순위: nasdaqlisted.txt 우량 cascade (Q → G).
+    # 시총 정렬 X — 알파벳 순. 운영 단에서 가격/거래량 사전 필터 필요.
+    # 사용자 결정 (2026-06-02): 500 → 1500까지 확대. Q+G 약 1967종목 풀.
+    if len(tickers) < n:
+        composite = _fetch_nasdaqlisted_common(market_categories=("Q", "G"))
+        added = 0
+        for t in composite:
+            if t in seen:
+                continue
+            seen.add(t)
+            tickers.append(t)
+            added += 1
+            if len(tickers) >= n:
+                break
+        log.info("nasdaqlisted Q+G에서 추가 %d 종목 (누적 %d)", added, len(tickers))
 
     return tickers[:n]
 

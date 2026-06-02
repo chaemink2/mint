@@ -20,7 +20,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -43,9 +43,13 @@ jobs:
           MINT_USE_ML_CONFIDENCE:    'true'
           MINT_USE_MINUTE_RULE:      'false'   # 1차 발견은 minute_first(아래) 사용
           MINT_MIN_ML_CONFIDENCE:    '0.55'
-          # 2026-06-01: 171 → 500 (NASDAQ-100 + S&P 500/400/600 NASDAQ-listed cascade).
-          # KR 600 풀에 대응. 캐시 24h.
-          MINT_WATCHLIST_SIZE:       '500'
+          # 2026-06-02: 500 → 1500 (사용자 결정).
+          # cascade: NASDAQ-100(100) + S&P 500/400/600 NASDAQ-listed(~500)
+          #        + nasdaqlisted.txt Market Category Q+G(~900) — Rights/Units/Warrants/Preferred 제외.
+          # "탄탄한 우량주" 정의: S&P 지수 편입 OR NASDAQ Global Select/Global.
+          # NASDAQ Capital Market (S) 제외 — 페니/소형 위주.
+          # 분봉 1차 fetch는 1500 × ~500ms = 12.5분 (timeout 30 안전).
+          MINT_WATCHLIST_SIZE:       '1500'
           MINT_MAX_RISK_SCORE:       '45'
           MINT_MAX_DAILY_BUYS:       '30'
           MINT_US_SCAN:              'true'
