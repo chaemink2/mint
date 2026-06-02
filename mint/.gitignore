@@ -44,10 +44,11 @@ logs/
 *.pt
 *.ckpt
 *.joblib
-# GHA 추론용 — 운영 모델은 repo 포함 (Cloud Migration). KR + NASDAQ.
+# GHA 추론용 — 운영 모델은 repo 포함 (Cloud Migration). KR + NASDAQ + C2 상한가.
 # 실험용 alt 모델 (`*_exp_*.joblib`)은 ignore 유지.
 !data/models/mint_lgbm.joblib
 !data/models/mint_lgbm_us.joblib
+!data/models/mint_lgbm_kr_limitup.joblib
 data/models/training_data_*.csv
 data/backtest_*.csv
 models/checkpoints/

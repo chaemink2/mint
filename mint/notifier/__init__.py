@@ -152,6 +152,25 @@ def _format_buy_signal(sig: dict) -> str:
             f"{i_emoji} 기관 {i_net/10000:+,.0f}만주{pct_str} (5d)"
         )
 
+    # 2026-06-02: C2 — D+1 강한 상승(+15%) leading indicator P (KR only).
+    # 학습 결과 (val n=37k, base rate 3.78%):
+    #   P=0.30 → precision 60.0% / lift 15.9× / 일평균 0.4건 (rare-strong)
+    #   P=0.20 → precision 28.6% / lift  7.6× / 일평균 2.2건 (sweet spot)
+    #   P=0.10 → precision 13.7% / lift  3.6× / 일평균 35건  (loose)
+    limitup_line = ""
+    if sig.get("limitup_prob") is not None:
+        lp = float(sig["limitup_prob"])
+        if lp >= 0.30:
+            tag = "🚀🚀🚀 매우 강함 (precision 60%)"
+        elif lp >= 0.20:
+            tag = "🚀🚀 강함 (precision 29%)"
+        elif lp >= 0.10:
+            tag = "🚀 양호 (precision 14%)"
+        else:
+            tag = ""
+        if lp >= 0.05:  # 5% 미만은 표시 의미 약함
+            limitup_line = f"⚡ D+1 강한상승 P={lp*100:.1f}% {tag}".strip()
+
     # 순서: 핵심(잘리면 안 됨) → 부가(잘려도 OK)
     # truncate가 라인 단위라 아래쪽부터 잘림
     lines = [
@@ -160,6 +179,7 @@ def _format_buy_signal(sig: dict) -> str:
         f"🎯 {_format_price(target, market)} ({target_ret:+.1f}%) / 손절 {_format_price(stop, market)} ({stop_ret:+.1f}%)",
         f"⏱ {hold_h:.0f}h내 권고 · 유효 {valid_min}분",
         regime_line,
+        limitup_line,
         flow_line,
         fresh or "",
         minute_marker,

@@ -32,6 +32,11 @@ log = logging.getLogger("mint.lgbm")
 MODEL_PATHS = {
     "KR": os.environ.get("MINT_MODEL_PATH_KR", "mint/data/models/mint_lgbm.joblib"),
     "US": os.environ.get("MINT_MODEL_PATH_US", "mint/data/models/mint_lgbm_us.joblib"),
+    # 2026-06-02: C2 — 상한가/강한 상승 leading indicator 별도 모델
+    "KR_LIMITUP": os.environ.get(
+        "MINT_MODEL_PATH_KR_LIMITUP",
+        "mint/data/models/mint_lgbm_kr_limitup.joblib",
+    ),
 }
 
 # 하위 호환 — 기존 코드가 DEFAULT_MODEL_PATH = KR 모델로 가정
@@ -139,3 +144,13 @@ def get_cached_model(
 
 def clear_model_cache() -> None:
     _MODEL_CACHE.clear()
+
+
+def get_cached_limitup_model() -> Optional[TrainedModel]:
+    """C2 — 상한가/강한 상승 leading indicator 모델 (KR 전용).
+
+    파일 없거나 의존성 미설치 시 None — rule_scanner는 silently skip.
+    """
+    return get_cached_model(path=MODEL_PATHS.get(
+        "KR_LIMITUP", "mint/data/models/mint_lgbm_kr_limitup.joblib"
+    ))

@@ -122,6 +122,26 @@ def _ml_probability(df: pd.DataFrame, market: Optional[str] = None) -> Optional[
     return model.predict_proba(feats)
 
 
+def _limitup_probability(df: pd.DataFrame, market: str) -> Optional[float]:
+    """C2 — D+1 강한 상승 (≥ threshold) 확률. KR 전용 별도 모델.
+
+    모델 파일 없거나 비활성(env MINT_LIMITUP_ENABLED=false) 시 None.
+    rule_scanner는 None이면 메시지에 표시만 skip — 시그널 차단 X.
+    """
+    if os.environ.get("MINT_LIMITUP_ENABLED", "true").lower() != "true":
+        return None
+    if market not in ("KOSPI", "KOSDAQ"):
+        return None
+    from engine.models.lgbm import get_cached_limitup_model
+    model = get_cached_limitup_model()
+    if model is None:
+        return None
+    feats = compute_features(df)
+    if feats is None:
+        return None
+    return model.predict_proba(feats)
+
+
 def evaluate_ticker_minute_first(
     ticker: str, market: str, df: pd.DataFrame, stats: Optional[dict] = None
 ) -> Optional[dict]:
@@ -241,6 +261,16 @@ def evaluate_ticker_minute_first(
                         return None
         except Exception as e:
             log.debug("flow_kr fetch failed for %s: %s", ticker, e)
+
+    # 2026-06-02: C2 — 상한가/강한 상승 leading indicator P 첨부 (KR only).
+    # 별도 모델이라 기존 ML score 무영향. 표시만 (시그널 차단 X).
+    if market in ("KOSPI", "KOSDAQ"):
+        try:
+            limitup_p = _limitup_probability(df, market=market)
+            if limitup_p is not None:
+                result["limitup_prob"] = float(limitup_p)
+        except Exception as e:
+            log.debug("limitup probability failed for %s: %s", ticker, e)
     return result
 
 
@@ -345,6 +375,15 @@ def evaluate_ticker(
     }
     if minute_info:
         result.update(minute_info)
+
+    # 2026-06-02: C2 — limitup probability 첨부 (KR only, 별도 모델)
+    if market in ("KOSPI", "KOSDAQ"):
+        try:
+            limitup_p = _limitup_probability(df, market=market)
+            if limitup_p is not None:
+                result["limitup_prob"] = float(limitup_p)
+        except Exception as e:
+            log.debug("limitup probability failed for %s: %s", ticker, e)
     return result
 
 

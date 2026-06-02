@@ -35,6 +35,93 @@ def _watchlist(market: str, n: Optional[int] = None) -> List[str]:
     return get_watchlist(market, n=n if n is not None else config.ops.watchlist_size)
 
 
+def build_ticker_dataset_limitup(
+    ticker: str,
+    market: str,
+    days: int,
+    window: int = 60,
+    threshold: float = 0.15,
+) -> List[dict]:
+    """C2 — 상한가/강한 상승 leading indicator 학습용 (2026-06-02).
+
+    기존 build_ticker_dataset과 다른 점:
+    - 룰 필터 (모멘텀/리스크/볼륨) 제거 — 룰 통과 X 시점에서도 다음날 상한가 가능
+    - 라벨: 다음 거래일(D+1)의 (high - prev_close) / prev_close >= threshold
+    - target_return/stop_loss/max_hold_days 무관 (binary classifier)
+
+    threshold (기본 0.15 = +15%) 가이드:
+    - 0.30 = 실 상한가 (시총 상위 600 안에서 1년에 ~5건, 극희소)
+    - 0.27 = 상한가 근접 (0.46%)
+    - 0.20 = 강한 상승 (1.18%) — sweet spot
+    - 0.15 = 학습 가능 베이스 (2.33%)
+    """
+    bars = fetch_bars(ticker, market, days=days + window)
+    if bars.empty or len(bars) < window + 2:
+        return []
+
+    rows: List[dict] = []
+    closes = bars["close"].astype(float)
+    highs = bars["high"].astype(float)
+
+    for i in range(window, len(bars) - 1):
+        sub = bars.iloc[i - window : i + 1].reset_index(drop=True)
+        if len(sub) < MIN_BARS:
+            continue
+
+        feats = compute_features(sub)
+        if feats is None:
+            continue
+
+        # 라벨: 다음 거래일(D+1) high / 현재 종가 - 1 >= threshold
+        # i가 D, i+1이 D+1.
+        ref_close = float(closes.iloc[i])
+        next_high = float(highs.iloc[i + 1])
+        if ref_close <= 0:
+            continue
+        gain_next = (next_high / ref_close) - 1
+        label = 1 if gain_next >= threshold else 0
+        rows.append(
+            {
+                **feats,
+                "label": label,
+                "gain_next": float(gain_next),
+                "ticker": ticker,
+                "market": market,
+                "date": str(bars.iloc[i]["ts_local"])[:10],
+            }
+        )
+    return rows
+
+
+def build_dataset_limitup(
+    markets: List[str],
+    days: int = 365,
+    universe_size: Optional[int] = None,
+    threshold: float = 0.15,
+) -> pd.DataFrame:
+    """C2 — 상한가/강한 상승 라벨 학습용 데이터셋 빌드."""
+    all_rows: List[dict] = []
+    for m in markets:
+        tickers = _watchlist(m, n=universe_size)
+        log.info("Build limitup dataset %s — %d tickers (threshold +%.0f%%)",
+                 m, len(tickers), threshold * 100)
+        for t in tickers:
+            try:
+                rows = build_ticker_dataset_limitup(
+                    t, m, days=days, threshold=threshold,
+                )
+            except Exception as e:
+                log.debug("build_ticker_dataset_limitup(%s) failed: %s", t, e)
+                rows = []
+            if rows:
+                pos = sum(r["label"] for r in rows)
+                if pos > 0:
+                    log.info("  %s — %d samples, pos %d (%.2f%%)",
+                             t, len(rows), pos, pos / len(rows) * 100)
+            all_rows.extend(rows)
+    return pd.DataFrame(all_rows)
+
+
 def build_ticker_dataset(
     ticker: str,
     market: str,
@@ -325,6 +412,71 @@ def run_training(
     return {
         "n_samples": int(len(df)),
         "pos_rate": float(df["label"].mean()),
+        "metrics": trained.val_metrics,
+        "model_path": save_path,
+        "dataset_csv": csv_path,
+    }
+
+
+def run_training_limitup(
+    markets: Optional[List[str]] = None,
+    days: int = 730,
+    universe_size: Optional[int] = None,
+    threshold: float = 0.15,
+    model_path: Optional[str] = None,
+) -> dict:
+    """C2 — 상한가/강한 상승 leading indicator 학습 (2026-06-02).
+
+    별도 모델 (`mint_lgbm_kr_limitup.joblib`) 저장. 기존 24h+3% 모델 무영향.
+    """
+    markets = markets or ["KOSPI", "KOSDAQ"]
+    log.info("Building limitup dataset — markets=%s days=%d size=%s threshold=%+.0f%%",
+             markets, days, universe_size if universe_size is not None else "static",
+             threshold * 100)
+
+    df = build_dataset_limitup(
+        markets, days=days,
+        universe_size=universe_size, threshold=threshold,
+    )
+    log.info("Limitup dataset built — %d samples (pos rate %.4f)",
+             len(df), df["label"].mean() if not df.empty else 0)
+
+    if df.empty:
+        return {"error": "empty dataset", "n_samples": 0}
+
+    pos_count = int(df["label"].sum())
+    if pos_count < 50:
+        log.warning(
+            "양성 표본 %d 건 — 학습 가능하지만 신뢰도 낮음. "
+            "universe_size↑ 또는 days↑ 또는 threshold↓ 권장.",
+            pos_count,
+        )
+
+    os.makedirs("mint/data/models", exist_ok=True)
+    suffix = _market_suffix(markets)
+    csv_path = (
+        f"mint/data/models/training_data_{suffix}_limitup_thr{int(threshold*100)}_"
+        f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    )
+    df.to_csv(csv_path, index=False, encoding="utf-8")
+    log.info("Dataset saved → %s", csv_path)
+
+    trained = train_model(df, max_hold_days=1)
+
+    # 별도 모델 경로 — 기존 mint_lgbm.joblib 보호
+    from engine.models.lgbm import MODEL_PATHS, clear_model_cache
+    save_path = model_path or MODEL_PATHS.get("KR_LIMITUP",
+                                              "mint/data/models/mint_lgbm_kr_limitup.joblib")
+    trained.config["label_mode"] = "limitup"
+    trained.config["threshold"] = threshold
+    trained.save(save_path)
+    clear_model_cache()
+
+    return {
+        "n_samples": int(len(df)),
+        "pos_count": pos_count,
+        "pos_rate": float(df["label"].mean()),
+        "threshold": threshold,
         "metrics": trained.val_metrics,
         "model_path": save_path,
         "dataset_csv": csv_path,

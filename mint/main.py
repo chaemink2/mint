@@ -352,13 +352,36 @@ def cmd_train(markets: list, days: int, max_hold_days: int,
     print_training_report(result)
 
 
+def cmd_train_limitup(markets: list, days: int, universe_size: int | None,
+                      threshold: float) -> None:
+    """C2 — 상한가/강한 상승 leading indicator 학습."""
+    try:
+        from engine.training import print_training_report, run_training_limitup
+    except Exception as e:
+        log.error("학습 모듈 로드 실패: %s", e)
+        return
+
+    try:
+        result = run_training_limitup(
+            markets=markets, days=days,
+            universe_size=universe_size, threshold=threshold,
+        )
+    except RuntimeError as e:
+        log.error("%s", e)
+        return
+    print_training_report(result)
+    if "threshold" in result:
+        print(f"  라벨 정의      : 다음 거래일 high ≥ ref_close × (1+{result['threshold']:.2f})")
+        print(f"  양성 표본      : {result['pos_count']} ({result['pos_rate']*100:.2f}%)")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Mint — short-term trading signals")
     parser.add_argument(
         "command",
         nargs="?",
         default="scan",
-        choices=["scan", "scan-us", "catch-up", "daemon", "backtest", "train", "daily-summary", "outcomes"],
+        choices=["scan", "scan-us", "catch-up", "daemon", "backtest", "train", "train-limitup", "daily-summary", "outcomes"],
         help="scan (default): one-shot KR rule scan",
     )
     parser.add_argument("--markets", nargs="+", default=None,
@@ -369,6 +392,8 @@ def main():
                         help="backtest/train 최대 보유일 (기본 1)")
     parser.add_argument("--watchlist-size", type=int, default=None,
                         help="시총 상위 N개 동적 워치리스트 (KR만). 미지정시 static 10개")
+    parser.add_argument("--limitup-threshold", type=float, default=0.15,
+                        help="train-limitup 라벨 임계 (기본 0.15 = D+1 high ≥ +15%)")
     args = parser.parse_args()
 
     _setup_log_file()
@@ -400,6 +425,11 @@ def main():
         train_days = args.days if args.days != 180 else 365
         cmd_train([m.upper() for m in markets], train_days, args.max_hold_days,
                   args.watchlist_size)
+    elif args.command == "train-limitup":
+        markets = args.markets or ["KOSPI", "KOSDAQ"]
+        train_days = args.days if args.days != 180 else 730
+        cmd_train_limitup([m.upper() for m in markets], train_days,
+                          args.watchlist_size, args.limitup_threshold)
 
 
 if __name__ == "__main__":
