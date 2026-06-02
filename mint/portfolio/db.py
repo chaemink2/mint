@@ -29,7 +29,17 @@ def _get_engine() -> Engine:
     global _engine
     if _engine is None:
         connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-        _engine = create_engine(DATABASE_URL, future=True, connect_args=connect_args)
+        # 2026-06-02: 분봉 1차 모드 도입 후 600종목 분봉 fetch가 8~13분 소요.
+        # 그 사이 Neon Postgres가 idle connection을 끊어 SSL closed 에러 다발.
+        # pool_pre_ping=True: 매 사용 전 SELECT 1 ping → 죽은 connection 자동 재생성.
+        # pool_recycle=300: 5분 넘은 connection은 prophylactic 재생성.
+        _engine = create_engine(
+            DATABASE_URL,
+            future=True,
+            connect_args=connect_args,
+            pool_pre_ping=True,
+            pool_recycle=300,
+        )
         # SQLite FK 활성화 (postgres는 기본 ON)
         if _engine.dialect.name == "sqlite":
             @event.listens_for(_engine, "connect")
