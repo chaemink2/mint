@@ -32,10 +32,14 @@ log = logging.getLogger("mint.lgbm")
 MODEL_PATHS = {
     "KR": os.environ.get("MINT_MODEL_PATH_KR", "mint/data/models/mint_lgbm.joblib"),
     "US": os.environ.get("MINT_MODEL_PATH_US", "mint/data/models/mint_lgbm_us.joblib"),
-    # 2026-06-02: C2 — 상한가/강한 상승 leading indicator 별도 모델
+    # 2026-06-02: C2 — 상한가/강한 상승 leading indicator 별도 모델 (시장별)
     "KR_LIMITUP": os.environ.get(
         "MINT_MODEL_PATH_KR_LIMITUP",
         "mint/data/models/mint_lgbm_kr_limitup.joblib",
+    ),
+    "US_LIMITUP": os.environ.get(
+        "MINT_MODEL_PATH_US_LIMITUP",
+        "mint/data/models/mint_lgbm_us_limitup.joblib",
     ),
 }
 
@@ -146,11 +150,17 @@ def clear_model_cache() -> None:
     _MODEL_CACHE.clear()
 
 
-def get_cached_limitup_model() -> Optional[TrainedModel]:
-    """C2 — 상한가/강한 상승 leading indicator 모델 (KR 전용).
+def get_cached_limitup_model(market: Optional[str] = None) -> Optional[TrainedModel]:
+    """C2 — 상한가/강한 상승 leading indicator 모델 (시장별).
 
+    market='NASDAQ' → US_LIMITUP, KR/None → KR_LIMITUP.
     파일 없거나 의존성 미설치 시 None — rule_scanner는 silently skip.
     """
-    return get_cached_model(path=MODEL_PATHS.get(
-        "KR_LIMITUP", "mint/data/models/mint_lgbm_kr_limitup.joblib"
-    ))
+    m = (market or "").upper()
+    if m == "NASDAQ":
+        path = MODEL_PATHS.get("US_LIMITUP",
+                               "mint/data/models/mint_lgbm_us_limitup.joblib")
+    else:
+        path = MODEL_PATHS.get("KR_LIMITUP",
+                               "mint/data/models/mint_lgbm_kr_limitup.joblib")
+    return get_cached_model(path=path)

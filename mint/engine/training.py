@@ -463,10 +463,16 @@ def run_training_limitup(
 
     trained = train_model(df, max_hold_days=1)
 
-    # 별도 모델 경로 — 기존 mint_lgbm.joblib 보호
+    # 시장별 모델 경로 — KR_LIMITUP / US_LIMITUP 분리
     from engine.models.lgbm import MODEL_PATHS, clear_model_cache
-    save_path = model_path or MODEL_PATHS.get("KR_LIMITUP",
-                                              "mint/data/models/mint_lgbm_kr_limitup.joblib")
+    if model_path:
+        save_path = model_path
+    elif set(markets) == {"NASDAQ"} or markets == ["NASDAQ"]:
+        save_path = MODEL_PATHS.get("US_LIMITUP",
+                                    "mint/data/models/mint_lgbm_us_limitup.joblib")
+    else:
+        save_path = MODEL_PATHS.get("KR_LIMITUP",
+                                    "mint/data/models/mint_lgbm_kr_limitup.joblib")
     trained.config["label_mode"] = "limitup"
     trained.config["threshold"] = threshold
     trained.save(save_path)

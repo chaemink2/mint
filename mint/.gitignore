@@ -49,6 +49,7 @@ logs/
 !data/models/mint_lgbm.joblib
 !data/models/mint_lgbm_us.joblib
 !data/models/mint_lgbm_kr_limitup.joblib
+!data/models/mint_lgbm_us_limitup.joblib
 data/models/training_data_*.csv
 data/backtest_*.csv
 models/checkpoints/

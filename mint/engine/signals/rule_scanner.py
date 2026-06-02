@@ -123,17 +123,17 @@ def _ml_probability(df: pd.DataFrame, market: Optional[str] = None) -> Optional[
 
 
 def _limitup_probability(df: pd.DataFrame, market: str) -> Optional[float]:
-    """C2 — D+1 강한 상승 (≥ threshold) 확률. KR 전용 별도 모델.
+    """C2 — D+1 강한 상승 (≥ threshold) 확률. KR + NASDAQ 시장별 별도 모델.
 
     모델 파일 없거나 비활성(env MINT_LIMITUP_ENABLED=false) 시 None.
     rule_scanner는 None이면 메시지에 표시만 skip — 시그널 차단 X.
     """
     if os.environ.get("MINT_LIMITUP_ENABLED", "true").lower() != "true":
         return None
-    if market not in ("KOSPI", "KOSDAQ"):
+    if market not in ("KOSPI", "KOSDAQ", "NASDAQ"):
         return None
     from engine.models.lgbm import get_cached_limitup_model
-    model = get_cached_limitup_model()
+    model = get_cached_limitup_model(market=market)
     if model is None:
         return None
     feats = compute_features(df)
@@ -376,14 +376,13 @@ def evaluate_ticker(
     if minute_info:
         result.update(minute_info)
 
-    # 2026-06-02: C2 — limitup probability 첨부 (KR only, 별도 모델)
-    if market in ("KOSPI", "KOSDAQ"):
-        try:
-            limitup_p = _limitup_probability(df, market=market)
-            if limitup_p is not None:
-                result["limitup_prob"] = float(limitup_p)
-        except Exception as e:
-            log.debug("limitup probability failed for %s: %s", ticker, e)
+    # 2026-06-02: C2 — limitup probability 첨부 (KR + NASDAQ 시장별 별도 모델)
+    try:
+        limitup_p = _limitup_probability(df, market=market)
+        if limitup_p is not None:
+            result["limitup_prob"] = float(limitup_p)
+    except Exception as e:
+        log.debug("limitup probability failed for %s: %s", ticker, e)
     return result
 
 
