@@ -72,7 +72,7 @@
 3. **KR outcome 30건+ → 카드 m 재학습** (regime feature + dynamic exit 라벨)
 4. **카드 N — Dynamic Exit calibration** (REGIME_MULT grid search, outcome 20건+ 후)
 5. **카드 D — 페이퍼 트레이딩 인프라** (ML 0.79 vs live 검증)
-6. **P1 — 시장 지수 표시 오류** ([data/market_index.py](data/market_index.py) Naver 파싱) — 작업량 1~2h
+6. ~~**P1 — 시장 지수 표시 오류**~~ ✅ 2026-06-02 closed (재검증 결과 코드 정상 — OPERATION_WEEK1.md P1 참조)
 7. **Step 8 — Windows 작업 스케줄러 Disable** (사용자 Action 6)
 
 ### 📝 신규 요구사항 진행 패턴
@@ -141,7 +141,7 @@
 ### 다음 카드 우선순위 (1주 운영 후 결정)
 1. **outcome 30건 이상 누적 시 → 카드 m (재학습)**
 2. **GHA 안정 확인 시 → Step 8 (Windows 작업 스케줄러 Disable)**
-3. **알려진 이슈 처리**: P1 시장 지수 표시 오류, P2 UTC vs KST dedup, P3 mint/requirements.txt qlib 청소 (상세는 OPERATION_WEEK1.md)
+3. **알려진 이슈 처리**: ~~P1 시장 지수 표시 오류~~ (6/2 closed), ~~P2 UTC vs KST dedup~~ (5/23 closed), P3 mint/requirements.txt qlib 청소 (상세는 OPERATION_WEEK1.md)
 4. **카드 C** — KOSPI/KOSDAQ regime/섹터 독립 신호
 5. **카드 D** — 페이퍼 트레이딩 인프라
 6. **NASDAQ 야간** — scan-us.yml cron 주석 해제

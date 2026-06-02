@@ -109,13 +109,14 @@ MINT_MAX_RISK_SCORE:    '45'
 
 ## 🐛 알려진 이슈 / 점검 노트 (다음 세션 우선순위)
 
-### P1 — 시장 지수 표시 오류
-- **증상**: 5/22 대시보드에서 KOSPI 7,815 (+8.42%), KOSDAQ 1,105 (+4.73%) — 평소 KOSPI 2,800대 / KOSDAQ 800대와 mismatch
-- **위치**: [data/market_index.py](data/market_index.py) Naver mobile API 응답 파싱
-- **영향**: 운영 자체에는 무영향(시그널 발급 무관). 카톡/대시보드 표시만 오류.
-- **추정 원인**: Naver mobile API 응답 스키마 변경 — `nv` 필드 또는 `nf` 필드 등 다른 키 사용 가능성
-- **재현**: `python -X utf8 -c "import sys; sys.path.insert(0,'mint'); from data.market_index import fetch_summary; print(fetch_summary())"`
-- **다음 세션 작업량**: 1~2h
+### ~~P1 — 시장 지수 표시 오류~~ ✅ 2026-06-02 closed (코드 무결성 재검증)
+- ~~증상~~: 5/22 시점 KOSPI 7,815 (+8.42%) — 그 당시엔 실 표시 오류였을 가능성 있음
+- **6/2 재검증 결과**: [data/market_index.py](data/market_index.py) 파싱 로직 **이상 없음**. 라인별 점검 + 3-source cross-check 통과
+  - Naver 모바일 basic API · Naver polling API · Yahoo `^KS11` 모두 KOSPI 8,801.49 동일 반환 (6/2 종가). KOSPI는 5/27 8,228 → 6/2 8,801로 상승한 상태
+  - 사용자 카톡 리포트 "KOSPI 8,596.85 (-2.18%)"는 오늘 intraday 범위(8,503~8,933) 안 합법 tick (어제 종가 8,788.38 대비 정확히 -2.18%)
+  - "nv/nf 필드" 가설은 검증 없이 적힌 추정이었음 — 실제 Naver API는 `closePrice`/`fluctuationsRatio`/`compareToPreviousClosePrice`/`compareToPreviousPrice.code` full key 사용, 코드와 정확히 일치
+- **현재 파싱 robustness**: `_direction_sign` marker 기반 부호 적용 + reported vs computed pct self-consistency 검증(0.05pp tolerance)으로 양쪽 스키마(UP=부호없음, DOWN=부호있음) 모두 정상 처리
+- **재현**: `python -X utf8 -c "import sys; sys.path.insert(0,'mint'); from data.market_index import get_market_summary, format_summary_line; print(format_summary_line())"` (이전 노트의 `fetch_summary`는 함수명 오타 — 실제는 `get_market_summary`)
 
 ### ~~P2 — UTC vs KST dedup 키 잠재 이슈~~ ✅ 2026-05-23 해결 (R1+R2, `8c43e1c`)
 - ~~증상~~: 5/21 KST 23~00시 사이에 daily-summary GHA 실행 시 dedup 키가 UTC date 기준이라 발생
