@@ -138,6 +138,20 @@ def _format_buy_signal(sig: dict) -> str:
     fresh = _freshness_line(sig["ticker"], market, ref)
     minute_marker = "🔥 5분봉 패턴 동시 통과" if config.signal.use_minute_rule else ""
 
+    # 2026-06-02: C1 수급 한 줄 (KR only). 외국인/기관 5d 순매매 + 외국인 보유 비율.
+    flow_line = ""
+    if market in ("KOSPI", "KOSDAQ") and sig.get("foreign_net_5d") is not None:
+        f_net = sig.get("foreign_net_5d") or 0
+        i_net = sig.get("inst_net_5d") or 0
+        f_pct = sig.get("foreign_pct")
+        f_emoji = "🟩" if f_net > 0 else ("🟥" if f_net < 0 else "⬜")
+        i_emoji = "🟩" if i_net > 0 else ("🟥" if i_net < 0 else "⬜")
+        pct_str = f" · 외국인 {f_pct:.1f}%" if f_pct is not None else ""
+        flow_line = (
+            f"{f_emoji} 외국인 {f_net/10000:+,.0f}만주 · "
+            f"{i_emoji} 기관 {i_net/10000:+,.0f}만주{pct_str} (5d)"
+        )
+
     # 순서: 핵심(잘리면 안 됨) → 부가(잘려도 OK)
     # truncate가 라인 단위라 아래쪽부터 잘림
     lines = [
@@ -146,6 +160,7 @@ def _format_buy_signal(sig: dict) -> str:
         f"🎯 {_format_price(target, market)} ({target_ret:+.1f}%) / 손절 {_format_price(stop, market)} ({stop_ret:+.1f}%)",
         f"⏱ {hold_h:.0f}h내 권고 · 유효 {valid_min}분",
         regime_line,
+        flow_line,
         fresh or "",
         minute_marker,
         f"모멘텀 {momentum_pct:+.1f}% · {conf_label} {confidence_pct:.0f}%",

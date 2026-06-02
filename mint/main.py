@@ -12,6 +12,7 @@ import argparse
 import logging
 import os
 import sys
+from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -283,16 +284,23 @@ def cmd_daily_summary():
     except Exception as e:
         log.debug("scan funnel fetch failed: %s", e)
 
-    if s7["total"]:
-        stats_lines.append(
-            f"📈 최근 7일 Win rate: {s7['win_rate']*100:.0f}% "
-            f"(W{s7['win']}/L{s7['loss']}/T{s7['time_exit']})"
+    # 2026-06-02: 결정 win rate(W/(W+L)) + 보수 win rate(W/(W+L+T)) 두 지표.
+    # TIME_EXIT은 target/stop 둘 다 안 닿은 미결정 — 사용자 직관에선 모수 제외.
+    def _fmt_line(label: str, s: dict) -> Optional[str]:
+        if not s["total"]:
+            return None
+        dwr = s.get("decisive_win_rate")
+        dwr_str = f"{dwr*100:.0f}%" if dwr is not None else "n/a"
+        return (
+            f"📈 {label} 결정 {dwr_str} ({s['win']}/{s['decisive']}) · "
+            f"보수 {s['win_rate']*100:.0f}% (W{s['win']}/L{s['loss']}/T{s['time_exit']})"
         )
-    if s30["total"]:
-        stats_lines.append(
-            f"📈 최근 30일 Win rate: {s30['win_rate']*100:.0f}% "
-            f"(W{s30['win']}/L{s30['loss']}/T{s30['time_exit']})"
-        )
+    line7 = _fmt_line("7일", s7)
+    line30 = _fmt_line("30일", s30)
+    if line7:
+        stats_lines.append(line7)
+    if line30:
+        stats_lines.append(line30)
 
     log.info(
         "Daily summary: BUY=%d, positions=%d, exit_advices(non-HOLD)=%d, 7d_win=%s",

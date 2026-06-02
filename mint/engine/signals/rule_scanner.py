@@ -3,6 +3,7 @@ Rule-based signal scanner (Step 2 E2E).
 ML confidence is NOT used until LightGBM is calibrated (Step 3b).
 """
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -219,6 +220,27 @@ def evaluate_ticker_minute_first(
         "discovery_mode": "minute_first",
     }
     result.update(minute_info)
+
+    # 2026-06-02: C1 — 외국인/기관 수급 attach (KR only, Naver fallback).
+    # 시그널 후보(여기까지 통과한 ~30종목)에만 fetch — GHA timeout 회피.
+    # MINT_FLOW_FILTER=true 면 "외국인+기관 둘 다 5d 순매도" 종목 차단.
+    if market in ("KOSPI", "KOSDAQ"):
+        try:
+            from data.flow_kr import get_flow_summary
+            flow = get_flow_summary(ticker, days=5)
+            if flow:
+                result["foreign_net_5d"] = flow["foreign_net_5d"]
+                result["inst_net_5d"] = flow["inst_net_5d"]
+                result["foreign_pct"] = flow["foreign_pct"]
+                if os.environ.get("MINT_FLOW_FILTER", "false").lower() == "true":
+                    if flow["foreign_net_5d"] < 0 and flow["inst_net_5d"] < 0:
+                        log.debug(
+                            "Skip %s — flow filter: foreign=%d inst=%d 둘 다 매도",
+                            ticker, flow["foreign_net_5d"], flow["inst_net_5d"],
+                        )
+                        return None
+        except Exception as e:
+            log.debug("flow_kr fetch failed for %s: %s", ticker, e)
     return result
 
 
@@ -397,10 +419,28 @@ def run_rule_scan(markets: Optional[List[str]] = None) -> List[int]:
         if not candidate:
             continue
 
-        if db.has_recent_signal(ticker, "BUY", hours=dedup_hours):
-            log.debug("Skip %s — recent BUY within %sh", ticker, dedup_hours)
-            stats["skipped_dedup"] += 1
-            continue
+        # 2026-06-02: 중복 시그널 confidence 기반 갱신.
+        # 4h 안 같은 ticker BUY가 있어도, 새 시그널의 confidence가
+        # min_improvement(0.05) 이상 높으면 이전 시그널을 SUPERSEDED 처리하고 갱신.
+        # 카톡 도배 방지 + outcome 추적 무결.
+        prev = db.find_dedup_target(ticker, "BUY", hours=dedup_hours)
+        if prev is not None:
+            min_improvement = float(os.environ.get("MINT_SUPERSEDE_MIN_IMPROVEMENT", "0.05"))
+            new_conf = float(candidate.get("model_score") or 0)
+            old_conf = float(prev.get("model_score") or prev.get("confidence") or 0)
+            if new_conf < old_conf + min_improvement:
+                log.debug(
+                    "Skip %s — recent BUY within %sh (new conf %.2f < old %.2f+%.2f)",
+                    ticker, dedup_hours, new_conf, old_conf, min_improvement,
+                )
+                stats["skipped_dedup"] += 1
+                continue
+            # supersede: 이전 시그널 expire, 새로 발급
+            db.supersede_signal(int(prev["id"]))
+            log.info(
+                "Supersede %s prev_id=%s old_conf=%.2f → new_conf=%.2f",
+                ticker, prev["id"], old_conf, new_conf,
+            )
 
         from config.tz import now_kst
         valid_until = (

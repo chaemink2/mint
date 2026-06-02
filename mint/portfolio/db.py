@@ -416,6 +416,39 @@ def has_recent_signal(ticker: str, signal_type: str, hours: int = 4) -> bool:
         return row is not None
 
 
+def find_dedup_target(
+    ticker: str, signal_type: str, hours: int = 4
+) -> Optional[Dict]:
+    """dedup 검사 시 이전 시그널을 반환 (가장 최근의 active/expired 무관).
+
+    has_recent_signal이 bool만 주는 데 비해, supersede 결정에 필요한 conf 등을 함께.
+    반환: {id, confidence, model_score, status} 또는 None.
+    """
+    since = (now_kst() - timedelta(hours=hours)).isoformat()
+    with get_conn() as conn:
+        row = conn.execute(
+            text("""SELECT id, confidence, model_score, status FROM signals
+               WHERE ticker = :t AND signal_type = :st AND created_at >= :since
+               ORDER BY created_at DESC LIMIT 1"""),
+            {"t": ticker, "st": signal_type, "since": since},
+        ).fetchone()
+        return dict(row._mapping) if row else None
+
+
+def supersede_signal(signal_id: int) -> None:
+    """이전 시그널을 'SUPERSEDED' 사유로 expired 처리.
+    중복 갱신 시 호출 — 새 시그널이 더 강한 confidence로 들어왔을 때.
+    """
+    with get_conn() as conn:
+        conn.execute(
+            text("""UPDATE signals
+               SET status = 'expired',
+                   expiry_reason = 'SUPERSEDED'
+               WHERE id = :id AND status = 'active'"""),
+            {"id": signal_id},
+        )
+
+
 def expire_stale_signals() -> int:
     """시간 만료된 active 시그널을 expired로. 만료 사유는 'TIME'."""
     now = now_kst_iso()
@@ -622,7 +655,15 @@ def evaluate_pending_outcomes(limit: int = 50) -> int:
 
 
 def get_outcome_stats(days: int = 30) -> dict:
-    """최근 days일 시그널의 outcome 분포 + win rate."""
+    """최근 days일 시그널의 outcome 분포 + win rate.
+
+    두 가지 win rate를 반환:
+    - win_rate (legacy): WIN / (WIN+LOSS+TIME_EXIT) — 보수적, 미결도 분모
+    - decisive_win_rate: WIN / (WIN+LOSS) — 결정난 시그널만. 사용자 직관과 정합.
+
+    TIME_EXIT은 "target도 stop도 안 닿은 무결정" — outcome_close 기준으로
+    micro-WIN/micro-LOSS 분리도 옵션 (이번엔 안 함, 추후 필요 시).
+    """
     since = (now_kst() - timedelta(days=days)).isoformat()
     with get_conn() as conn:
         rows = conn.execute(
@@ -638,14 +679,18 @@ def get_outcome_stats(days: int = 30) -> dict:
     loss = counts.get("LOSS", 0)
     time_exit = counts.get("TIME_EXIT", 0)
     total = win + loss + time_exit
+    decisive = win + loss
     win_rate = (win / total) if total else None
+    decisive_win_rate = (win / decisive) if decisive else None
     return {
         "days": days,
         "total": total,
+        "decisive": decisive,
         "win": win,
         "loss": loss,
         "time_exit": time_exit,
-        "win_rate": win_rate,
+        "win_rate": win_rate,                   # 보수적 (legacy)
+        "decisive_win_rate": decisive_win_rate, # 사용자 직관
     }
 
 

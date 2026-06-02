@@ -143,8 +143,13 @@ def _outcome_trend_df(days: int = 30) -> pd.DataFrame:
         if col not in pivot.columns:
             pivot[col] = 0
     pivot["total"] = pivot["WIN"] + pivot["LOSS"] + pivot["TIME_EXIT"]
+    pivot["decisive"] = pivot["WIN"] + pivot["LOSS"]
     pivot["win_rate"] = pivot.apply(
         lambda r: (r["WIN"] / r["total"]) if r["total"] > 0 else 0, axis=1
+    )
+    # 2026-06-02: TIME_EXIT 제외한 decisive win rate (사용자 직관에 정합)
+    pivot["decisive_win_rate"] = pivot.apply(
+        lambda r: (r["WIN"] / r["decisive"]) if r["decisive"] > 0 else None, axis=1
     )
     return pivot
 
@@ -415,23 +420,35 @@ if page == "📊 대시보드":
             total_loss = int(trend["LOSS"].sum())
             total_time = int(trend["TIME_EXIT"].sum())
             total_all = total_win + total_loss + total_time
-            win_rate = (total_win / total_all) if total_all else 0
+            total_decisive = total_win + total_loss
+            win_rate_legacy = (total_win / total_all) if total_all else 0
+            win_rate_decisive = (total_win / total_decisive) if total_decisive else None
             st.metric("누적 Win", total_win)
             st.metric("누적 Loss", total_loss)
-            st.metric("누적 TIME_EXIT", total_time)
-            st.metric("누적 Win rate", f"{win_rate*100:.1f}%")
+            st.metric("누적 TIME_EXIT", total_time, help="target/stop 둘 다 안 닿음. 미결정이라 결정 win rate 모수에서 제외.")
+            if win_rate_decisive is not None:
+                st.metric("결정 Win rate (W/(W+L))",
+                          f"{win_rate_decisive*100:.1f}%",
+                          help="TIME_EXIT 제외. 사용자 직관에 정합.")
+            st.metric("보수 Win rate (W/(W+L+T))", f"{win_rate_legacy*100:.1f}%",
+                      help="legacy 계산. TIME_EXIT을 분모에 포함 → 보수적.")
 
-        # 일별 win rate 라인
+        # 일별 win rate 라인 — 두 지표 동시 표시
         fig2 = go.Figure()
         fig2.add_scatter(x=trend["d"], y=trend["win_rate"] * 100,
-                         mode="lines+markers", line=dict(color="#58a6ff"), name="Win rate %")
+                         mode="lines+markers", line=dict(color="#58a6ff"), name="보수 (W/(W+L+T))")
+        # decisive는 None일 수 있어 fillna(0) — 0인 날은 라인 점프
+        dwr = (trend["decisive_win_rate"].fillna(0) * 100)
+        fig2.add_scatter(x=trend["d"], y=dwr,
+                         mode="lines+markers", line=dict(color="#3fb950"),
+                         name="결정 (W/(W+L))")
         fig2.add_hline(y=50, line_dash="dot", line_color="#8b949e", annotation_text="50%")
-        fig2.add_hline(y=78, line_dash="dot", line_color="#f0883e", annotation_text="모델 예상 78%")
         fig2.update_layout(
-            height=240, margin=dict(l=10, r=10, t=30, b=10),
-            title="일별 Win rate (모델 예상치 대비)",
+            height=260, margin=dict(l=10, r=10, t=30, b=10),
+            title="일별 Win rate — 보수 vs 결정",
             yaxis=dict(range=[0, 105], ticksuffix="%"),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", y=-0.2),
         )
         st.plotly_chart(fig2, use_container_width=True)
 
