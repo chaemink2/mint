@@ -3,11 +3,12 @@ name: Mint US Scan (NASDAQ)
 # 평일 NY 정규장 = KST 22:30~익일 05:00 (DST: UTC 13:30~20:00 / 비DST: 14:30~21:00).
 #
 # 2026-05-27 활성화: Stage 2 NASDAQ 모델 학습 완료 (mint_lgbm_us.joblib).
-# 2026-06-01: cron 슬롯 명시 (KR과 동일 이유 — `*/10`은 GHA 부하 정책상 누락 다발).
+# 2026-06-02: 분산 슬롯 (KR과 동일 이유 — 정시/30분도 부하 회피 효과 부족).
 on:
   schedule:
-    - cron: '0 13-21 * * 1-5'    # 매 정시
-    - cron: '30 13-21 * * 1-5'   # 매 30분
+    - cron: '13 13-21 * * 1-5'
+    - cron: '33 13-21 * * 1-5'
+    - cron: '47 13-21 * * 1-5'
   workflow_dispatch: {}
 
 concurrency:
