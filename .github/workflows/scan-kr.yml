@@ -20,8 +20,9 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    # 2026-06-09 P0 롤백: 600+minute_first OFF 후 200종목 일봉/분봉 AND 모드 — 15분 충분.
-    timeout-minutes: 15
+    # 2026-06-09 P0 롤백: minute_first OFF 후 600종목 일봉+ML+분봉 AND 모드.
+    # 6/3 첫 success run (universe fetch 포함, minute_first=true 환경) 15분 완료 — 20분 안전 마진.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -45,9 +46,9 @@ jobs:
           MINT_USE_MINUTE_RULE:      'true'
           MINT_MIN_ML_CONFIDENCE:    '0.60'
           MINT_MIN_MINUTE_VOL_SPIKE: '2.0'
-          # 2026-06-09 P0 롤백: 600 → 200. 600+분봉1차 결합이 25분 timeout 초과해
-          # 6/4~6/9 4영업일 100% cancel. 28f36a6의 today_count 시장별 카운팅 픽스는 유지.
-          MINT_WATCHLIST_SIZE:       '200'
+          # 2026-06-09: 600 유지 (사용자 의향 — 소형주 catch율 우선).
+          # 600 자체는 timeout 원인 아님 (6/3 첫 success 15분 완료). 진짜 원인은 minute_first.
+          MINT_WATCHLIST_SIZE:       '600'
           MINT_MAX_RISK_SCORE:       '45'
           MINT_MAX_DAILY_BUYS:       '30'
           # 2026-06-09 P0 롤백: 분봉 1차 발견 OFF. be07ac5 운영 권장 자체가
