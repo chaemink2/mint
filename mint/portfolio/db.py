@@ -531,6 +531,41 @@ def mark_expiry_notified(signal_ids: List[int]) -> None:
         conn.execute(stmt, {"ids": list(signal_ids)})
 
 
+def unnotified_buy_signals(limit: int = 20) -> List[Dict]:
+    """발급됐지만 매수 카톡 아직 못 보낸 BUY 시그널 (active 상태만).
+
+    6/4~6/9 패턴 픽스: GHA scan timeout cancel 시 시그널은 DB에 logged됐으나
+    notify_buy_signals 호출 전에 죽어 카톡 미발송. 다음 scan 시작 시 catch-up.
+    만료된 시그널은 expiry_notified로 처리되므로 여기서 제외.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            text("""SELECT * FROM signals
+               WHERE signal_type = 'BUY'
+                 AND status = 'active'
+                 AND (notified IS NULL OR notified = 0)
+               ORDER BY id ASC
+               LIMIT :limit"""),
+            {"limit": int(limit)},
+        ).fetchall()
+        return _rows_to_dicts(rows)
+
+
+def mark_buy_notified(signal_ids: List[int]) -> None:
+    """매수 카톡 발송 성공한 시그널을 notified=1로 마킹.
+
+    notified_at은 KST 보존 (config/tz.py 정책).
+    """
+    if not signal_ids:
+        return
+    from config.tz import now_kst_iso
+    stmt = text("UPDATE signals SET notified = 1, notified_at = :at WHERE id IN :ids").bindparams(
+        bindparam("ids", expanding=True)
+    )
+    with get_conn() as conn:
+        conn.execute(stmt, {"ids": list(signal_ids), "at": now_kst_iso()})
+
+
 def _evaluate_single_outcome(sig: dict) -> Optional[dict]:
     """단일 시그널 outcome 평가. 시간 미경과 or 데이터 부족 시 None.
 

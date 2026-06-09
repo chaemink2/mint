@@ -539,7 +539,11 @@ def notify_expired_signals(signals: Iterable[dict]) -> int:
 
 
 def notify_buy_signals(signal_ids: Iterable[int]) -> int:
-    """시그널 ID 목록 → 카카오 알림. 발송된 메시지 수 반환."""
+    """시그널 ID 목록 → 카카오 알림. 발송된 메시지 수 반환.
+
+    발송 성공한 시그널은 signals.notified=1로 마킹 (mark_buy_notified).
+    cancel/실패 시 마킹 안 하므로 다음 scan에서 unnotified_buy_signals catch-up.
+    """
     ids = [i for i in signal_ids if i]
     if not ids:
         return 0
@@ -549,14 +553,17 @@ def notify_buy_signals(signal_ids: Iterable[int]) -> int:
         return 0
 
     from notifier import kakao  # 지연 import
+    from portfolio.db import mark_buy_notified
 
     signals = [get_signal(i) for i in ids]
     signals = [s for s in signals if s]
     if not signals:
         return 0
 
-    # 다수면 요약부터
+    sent_ids: List[int] = []
     sent = 0
+
+    # 다수면 요약부터
     if len(signals) > MAX_INDIVIDUAL_SENDS:
         names = ", ".join((s.get("name") or s["ticker"]) for s in signals[:5])
         summary = (
@@ -566,12 +573,26 @@ def notify_buy_signals(signal_ids: Iterable[int]) -> int:
         )
         if kakao.send_text(summary):
             sent += 1
+            # 요약 발송 성공 = 전체 시그널 mark (재발송 폭주 방지).
+            # 상위 MAX_INDIVIDUAL_SENDS 외 종목은 종목명만 전달돼도 사용자에게 알린 것으로 봄.
+            sent_ids.extend(int(s["id"]) for s in signals if s.get("id"))
         signals = signals[:MAX_INDIVIDUAL_SENDS]
 
     for s in signals:
         if kakao.send_text(_format_buy_signal(s)):
             sent += 1
-    log.info("Kakao buy notify sent=%d (of %d signals)", sent, len(ids))
+            sid = s.get("id")
+            if sid is not None and int(sid) not in sent_ids:
+                sent_ids.append(int(sid))
+
+    if sent_ids:
+        try:
+            mark_buy_notified(sent_ids)
+        except Exception as e:
+            log.warning("mark_buy_notified failure: %s", e)
+
+    log.info("Kakao buy notify sent=%d (of %d signals, marked=%d)",
+             sent, len(ids), len(sent_ids))
     return sent
 
 

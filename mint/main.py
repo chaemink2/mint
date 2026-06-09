@@ -22,6 +22,7 @@ from config.settings import config
 from portfolio.db import (
     init_db, migrate_db, expire_stale_signals, get_open_positions,
     check_price_expiry, unnotified_expired_signals, mark_expiry_notified,
+    unnotified_buy_signals,
     evaluate_pending_outcomes, get_outcome_stats,
 )
 from engine.signals.rule_scanner import run_rule_scan
@@ -81,6 +82,25 @@ def _process_expiries():
         log.warning("expiry processing failed: %s", e)
 
 
+def _process_unnotified_buys():
+    """이전 scan에서 logged됐지만 카톡 미발송된 active BUY 시그널 catch-up.
+
+    P1a 픽스 (6/4~6/9 60+건 카톡 누락 패턴): GHA scan timeout cancel 시
+    시그널은 DB에 저장됐으나 notify_buy_signals 호출 전에 죽음. 다음 scan 시작 시
+    아직 valid_until 안인 active BUY 시그널을 catch-up 발송.
+    만료된 건 _process_expiries로 따로 처리되므로 여기서 제외.
+    """
+    try:
+        pending = unnotified_buy_signals(limit=20)
+        if not pending:
+            return
+        ids = [int(s["id"]) for s in pending]
+        log.info("Catch-up notify: %d unnotified BUY signal(s)", len(ids))
+        _notify_buys(ids)
+    except Exception as e:
+        log.warning("catch-up buy notify failed: %s", e)
+
+
 def cmd_scan():
     """KR 워치리스트 룰 스캔 → signals DB. MINT_US_SCAN=true면 NASDAQ도 포함."""
     init_db()
@@ -97,6 +117,8 @@ def cmd_scan():
 
     # 만료된 시그널 정리 + 알림 (BEFORE new scan: 사용자가 새 시그널 보기 전에 죽은 거 알림)
     _process_expiries()
+    # 이전 scan timeout cancel로 미발송된 BUY 시그널 catch-up (P1a 픽스)
+    _process_unnotified_buys()
 
     ids = run_rule_scan(markets=markets)
     log.info("Scan finished — %s signal(s) logged (markets=%s)", len(ids), markets)
@@ -110,6 +132,7 @@ def cmd_scan_us():
     migrate_db()
     # KR 시그널 만료/알림도 같이 처리 (사용자가 자고 있는 동안 만료된 거 정리)
     _process_expiries()
+    _process_unnotified_buys()
     ids = run_rule_scan(markets=["NASDAQ"])
     log.info("US scan finished — %s signal(s) logged", len(ids))
     _notify_buys(ids)
