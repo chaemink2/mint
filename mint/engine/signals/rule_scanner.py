@@ -119,6 +119,16 @@ def _ml_probability(df: pd.DataFrame, market: Optional[str] = None) -> Optional[
     feats = compute_features(df)
     if feats is None:
         return None
+    # 2026-06-16 M1: v2 모델(18 features)이면 regime 2개를 라이브에서 보강.
+    # v1 모델은 feature_names 16개라 추가 키는 자동으로 무시됨.
+    if "mkt_regime_score" in (model.feature_names or []):
+        try:
+            from engine.market_regime import get_regime, regime_to_features
+            info = get_regime(market) if market else None
+            feats.update(regime_to_features(info))
+        except Exception as e:
+            log.debug("regime feature attach failed: %s", e)
+            feats.update({"mkt_regime_score": 0.0, "mkt_regime_bear": 0.0})
     return model.predict_proba(feats)
 
 

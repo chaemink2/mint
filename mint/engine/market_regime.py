@@ -214,6 +214,69 @@ def get_regime_or_sideways(market: str) -> RegimeInfo:
     )
 
 
+# ── 학습용 historical regime API (2026-06-16 M1) ─────────────
+
+_HIST_INDEX_CACHE: Dict[str, pd.DataFrame] = {}
+
+
+def fetch_index_history(market: str, days: int = 800) -> Optional[pd.DataFrame]:
+    """학습용 historical 지수 데이터 fetch. 캐시 (메모리). days+여유 buffer 포함.
+    반환: tz-naive index가 date인 DataFrame (Close 컬럼). 실패 시 None.
+    """
+    market = market.upper()
+    cache_key = f"{market}:{days}"
+    if cache_key in _HIST_INDEX_CACHE:
+        return _HIST_INDEX_CACHE[cache_key]
+    yf_ticker = _market_index_yfinance(market)
+    if not yf_ticker:
+        return None
+    try:
+        import yfinance as yf
+        df = yf.download(yf_ticker, period=f"{days + 100}d", interval="1d",
+                         progress=False, auto_adjust=False)
+        if df is None or df.empty:
+            return None
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        if "Close" not in df.columns:
+            return None
+        out = df[["Close"]].copy()
+        out.index = pd.to_datetime(out.index).tz_localize(None).normalize()
+        _HIST_INDEX_CACHE[cache_key] = out
+        return out
+    except Exception as e:
+        log.debug("historical index fetch failed (%s): %s", market, e)
+        return None
+
+
+def regime_at_date(market: str, target_date: pd.Timestamp,
+                   hist: Optional[pd.DataFrame] = None) -> Optional[RegimeInfo]:
+    """historical 지수 데이터에서 특정 날짜 기준 regime 계산.
+    target_date 시점까지의 21봉 이상이 있어야 함. 부족 시 None.
+    """
+    if hist is None:
+        hist = fetch_index_history(market)
+    if hist is None or hist.empty:
+        return None
+
+    target_date = pd.Timestamp(target_date).tz_localize(None).normalize()
+    sub = hist.loc[hist.index <= target_date]
+    if len(sub) < 21:
+        return None
+    return _compute_regime(market, sub.rename(columns={"Close": "Close"}))
+
+
+def regime_to_features(info: Optional[RegimeInfo]) -> Dict[str, float]:
+    """RegimeInfo → 학습 피처 2개. None이면 중립값(0.0, 0).
+    - mkt_regime_score: composite_score (-0.1 ~ +0.1 정도)
+    - mkt_regime_bear: 1 if BEAR/STRONG_BEAR else 0
+    """
+    if info is None:
+        return {"mkt_regime_score": 0.0, "mkt_regime_bear": 0.0}
+    bear = 1.0 if info.label in ("BEAR", "STRONG_BEAR") else 0.0
+    return {"mkt_regime_score": float(info.score), "mkt_regime_bear": bear}
+
+
 def regimes_line(markets: Optional[list] = None) -> str:
     """주어진 시장들의 regime 한 줄 (카톡/대시보드용).
     예: "🟢 KOSPI 상승 (5d +2.4%) / 🔴 KOSDAQ 하락 (5d -3.1%) / 🟢 NASDAQ 상승 (5d +1.5%)"

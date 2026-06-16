@@ -28,6 +28,10 @@ FEATURE_NAMES = [
     "bb_position", "obv_slope", "gap_pct", "regime_trend", "turnover_pct60",
 ]
 
+# 2026-06-16 M1: v2 — 시장 regime 2개 추가.
+# 학습-운영 분포 정합 + 강세장 끝물/약세장 진입 구간 구분 목적.
+FEATURE_NAMES_V2 = FEATURE_NAMES + ["mkt_regime_score", "mkt_regime_bear"]
+
 MIN_BARS = 25
 
 

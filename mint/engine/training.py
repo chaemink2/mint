@@ -26,7 +26,7 @@ from config.settings import config
 from data.collector import fetch_bars
 from data.universe import get_watchlist
 from engine.backtest import _simulate_exit
-from engine.features import FEATURE_NAMES, MIN_BARS, compute_features
+from engine.features import FEATURE_NAMES, FEATURE_NAMES_V2, MIN_BARS, compute_features
 
 log = logging.getLogger("mint.training")
 
@@ -118,6 +118,259 @@ def build_dataset_limitup(
                 if pos > 0:
                     log.info("  %s — %d samples, pos %d (%.2f%%)",
                              t, len(rows), pos, pos / len(rows) * 100)
+            all_rows.extend(rows)
+    return pd.DataFrame(all_rows)
+
+
+def build_ticker_dataset_v2a(
+    ticker: str,
+    market: str,
+    days: int,
+    window: int = 60,
+    index_hist: Optional[pd.DataFrame] = None,
+) -> List[dict]:
+    """v2a — regime feature 2개만 추가. 라벨은 fixed (+3%/-2%/24h, v1 동일).
+
+    v2와 차이: dynamic exit 라벨은 학습용으로 노이지 (ATR 기반 가변 target이
+    분류 task를 어렵게 함). v2a는 'regime feature만'의 효과를 격리해서 측정.
+    """
+    from engine.market_regime import (
+        fetch_index_history, regime_at_date, regime_to_features,
+    )
+    from engine.signals.rule_scanner import (
+        _estimate_expected_return_1d, _risk_score, _volume_ratio,
+    )
+
+    bars = fetch_bars(ticker, market, days=days + window)
+    if bars.empty or len(bars) < window + 2:
+        return []
+    if index_hist is None:
+        index_hist = fetch_index_history(market, days=days + window + 30)
+
+    rows: List[dict] = []
+    sig = config.signal
+    tgt_ret = sig.target_return
+    stop_ret = sig.stop_loss
+
+    for i in range(window, len(bars) - 1):
+        sub = bars.iloc[i - window : i + 1].reset_index(drop=True)
+        if len(sub) < MIN_BARS:
+            continue
+        expected = _estimate_expected_return_1d(sub)
+        if expected < sig.min_expected_return_1d:
+            continue
+        risk = _risk_score(sub)
+        if risk > sig.max_risk_score:
+            continue
+        vol_ratio = _volume_ratio(sub)
+        if vol_ratio < sig.min_volume_ratio:
+            continue
+        feats = compute_features(sub)
+        if feats is None:
+            continue
+
+        bar_date = pd.Timestamp(bars.iloc[i]["ts_local"]).tz_localize(None).normalize()
+        info = regime_at_date(market, bar_date, hist=index_hist)
+        feats.update(regime_to_features(info))
+
+        entry_price = float(bars.iloc[i]["close"])
+        trade = _simulate_exit(
+            bars=bars,
+            entry_idx=i,
+            target_price=entry_price * (1 + tgt_ret),
+            stop_price=entry_price * (1 + stop_ret),
+            max_hold_days=1,
+        )
+        if not trade:
+            continue
+        label = 1 if trade.profit_pct > 0 else 0
+        rows.append({
+            **feats, "label": label, "ticker": ticker, "market": market,
+            "date": str(bars.iloc[i]["ts_local"])[:10],
+            "regime_label": info.label if info else "UNKNOWN",
+        })
+    return rows
+
+
+def build_dataset_v2a(
+    markets: List[str], days: int = 730, universe_size: Optional[int] = None,
+) -> pd.DataFrame:
+    """v2a — regime feature만 추가 (라벨은 v1 동일 fixed)."""
+    from engine.market_regime import fetch_index_history
+    all_rows: List[dict] = []
+    for m in markets:
+        tickers = _watchlist(m, n=universe_size)
+        log.info("Build v2a dataset %s — %d tickers (regime+fixed_label)", m, len(tickers))
+        index_hist = fetch_index_history(m, days=days + 100)
+        for t in tickers:
+            try:
+                rows = build_ticker_dataset_v2a(t, m, days=days, index_hist=index_hist)
+            except Exception as e:
+                log.debug("build_ticker_dataset_v2a(%s) failed: %s", t, e)
+                rows = []
+            if rows:
+                pos = sum(r["label"] for r in rows)
+                log.info("  %s — %d samples, pos %d (%.2f%%)",
+                         t, len(rows), pos, pos / len(rows) * 100)
+            all_rows.extend(rows)
+    return pd.DataFrame(all_rows)
+
+
+def run_training_v2a(
+    markets: Optional[List[str]] = None,
+    days: int = 730,
+    universe_size: Optional[int] = None,
+    model_path: Optional[str] = None,
+) -> dict:
+    """v2a — regime feature만 추가 (라벨은 v1 동일 fixed). KR 전용."""
+    markets = markets or ["KOSPI", "KOSDAQ"]
+    log.info("v2a training — markets=%s days=%d universe=%s",
+             markets, days, universe_size if universe_size else "default")
+    df = build_dataset_v2a(markets, days=days, universe_size=universe_size)
+    log.info("v2a Dataset — %d samples (pos rate %.3f)",
+             len(df), df["label"].mean() if not df.empty else 0)
+    if df.empty:
+        return {"error": "empty dataset", "n_samples": 0}
+    os.makedirs("mint/data/models", exist_ok=True)
+    suffix = _market_suffix(markets)
+    csv_path = f"mint/data/models/training_data_{suffix}_v2a_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    df.to_csv(csv_path, index=False, encoding="utf-8")
+    log.info("v2a Dataset saved → %s", csv_path)
+    trained = train_model_v2(df)  # 같은 18-feature 학습 루틴 재사용
+    from engine.models.lgbm import clear_model_cache
+    save_path = model_path or "mint/data/models/mint_lgbm_v2a.joblib"
+    trained.save(save_path)
+    clear_model_cache()
+    return {
+        "n_samples": int(len(df)),
+        "pos_rate": float(df["label"].mean()),
+        "metrics": trained.val_metrics,
+        "model_path": save_path,
+        "dataset_csv": csv_path,
+    }
+
+
+def build_ticker_dataset_v2(
+    ticker: str,
+    market: str,
+    days: int,
+    window: int = 60,
+    index_hist: Optional[pd.DataFrame] = None,
+) -> List[dict]:
+    """v2 — regime feature 2개 + dynamic exit 라벨 (2026-06-16 M1).
+
+    v1 (build_ticker_dataset)과 차이:
+    - 피처: 16 → 18 (mkt_regime_score, mkt_regime_bear 추가)
+    - 라벨: 고정 +3%/-2%/24h → compute_dynamic_exit 기반 동적 target/stop/hold
+      (학습 시점 ATR + 학습 시점 regime으로 결정 — 운영과 정합)
+    - 룰 필터는 동일 유지 (학습-추론 정합)
+
+    index_hist 미지정 시 fetch_index_history(market)로 자동 lookup.
+    """
+    from engine.market_regime import (
+        fetch_index_history, regime_at_date, regime_to_features,
+    )
+    from engine.dynamic_exit import compute_dynamic_exit
+    from engine.signals.rule_scanner import (
+        _estimate_expected_return_1d, _risk_score, _volume_ratio,
+    )
+
+    bars = fetch_bars(ticker, market, days=days + window)
+    if bars.empty or len(bars) < window + 2:
+        return []
+
+    if index_hist is None:
+        index_hist = fetch_index_history(market, days=days + window + 30)
+
+    rows: List[dict] = []
+    sig = config.signal
+
+    for i in range(window, len(bars) - 1):
+        sub = bars.iloc[i - window : i + 1].reset_index(drop=True)
+        if len(sub) < MIN_BARS:
+            continue
+
+        # 룰 필터 (학습-추론 분포 정합)
+        expected = _estimate_expected_return_1d(sub)
+        if expected < sig.min_expected_return_1d:
+            continue
+        risk = _risk_score(sub)
+        if risk > sig.max_risk_score:
+            continue
+        vol_ratio = _volume_ratio(sub)
+        if vol_ratio < sig.min_volume_ratio:
+            continue
+
+        feats = compute_features(sub)
+        if feats is None:
+            continue
+
+        # 학습 시점 regime — 거래일 t의 종가까지 데이터로 산출
+        bar_date = pd.Timestamp(bars.iloc[i]["ts_local"]).tz_localize(None).normalize()
+        info = regime_at_date(market, bar_date, hist=index_hist)
+        regime_feats = regime_to_features(info)
+        feats.update(regime_feats)
+
+        # Dynamic exit 라벨 — ATR + 학습 시점 regime으로 target/stop/hold 결정
+        de = compute_dynamic_exit(feats["atr_pct"], market, regime=info)
+        entry_price = float(bars.iloc[i]["close"])
+        target_price = entry_price * (1 + de.target_pct)
+        stop_price = entry_price * (1 + de.stop_pct)
+        # max_hold_hours → days (일봉 데이터 해상도 한계). 최소 1d.
+        max_hold_d = max(1, int(round(de.max_hold_hours / 24)))
+
+        trade = _simulate_exit(
+            bars=bars,
+            entry_idx=i,
+            target_price=target_price,
+            stop_price=stop_price,
+            max_hold_days=max_hold_d,
+        )
+        if not trade:
+            continue
+
+        label = 1 if trade.profit_pct > 0 else 0
+        rows.append(
+            {
+                **feats,
+                "label": label,
+                "ticker": ticker,
+                "market": market,
+                "date": str(bars.iloc[i]["ts_local"])[:10],
+                "regime_label": info.label if info else "UNKNOWN",
+                "de_target_pct": de.target_pct,
+                "de_stop_pct": de.stop_pct,
+                "de_hold_h": de.max_hold_hours,
+            }
+        )
+    return rows
+
+
+def build_dataset_v2(
+    markets: List[str],
+    days: int = 730,
+    universe_size: Optional[int] = None,
+) -> pd.DataFrame:
+    """v2 데이터셋 빌드 — regime feature + dynamic exit 라벨."""
+    from engine.market_regime import fetch_index_history
+
+    all_rows: List[dict] = []
+    for m in markets:
+        tickers = _watchlist(m, n=universe_size)
+        log.info("Build v2 dataset %s — %d tickers (regime+dynamic_exit)", m, len(tickers))
+        index_hist = fetch_index_history(m, days=days + 100)
+        if index_hist is None:
+            log.warning("%s — historical index fetch failed → regime features 0", m)
+        for t in tickers:
+            try:
+                rows = build_ticker_dataset_v2(t, m, days=days, index_hist=index_hist)
+            except Exception as e:
+                log.debug("build_ticker_dataset_v2(%s) failed: %s", t, e)
+                rows = []
+            if rows:
+                pos = sum(r["label"] for r in rows)
+                log.info("  %s — %d samples, pos %d (%.2f%%)",
+                         t, len(rows), pos, pos / len(rows) * 100)
             all_rows.extend(rows)
     return pd.DataFrame(all_rows)
 
@@ -239,6 +492,121 @@ def _time_split(df: pd.DataFrame, train_frac: float = 0.8) -> Tuple[pd.DataFrame
     df = df.sort_values("date").reset_index(drop=True)
     n_train = int(len(df) * train_frac)
     return df.iloc[:n_train], df.iloc[n_train:]
+
+
+def train_model_v2(df: pd.DataFrame):
+    """v2 학습 — 18 features (16 + regime 2) · dynamic exit 라벨.
+
+    구조는 train_model과 동일하나 feature_names가 V2.
+    """
+    try:
+        import lightgbm as lgb
+        from sklearn.isotonic import IsotonicRegression
+        from sklearn.metrics import log_loss, roc_auc_score
+    except ImportError as e:
+        raise RuntimeError(f"학습에는 lightgbm + sklearn 필요 ({e})")
+
+    if df.empty:
+        raise RuntimeError("Empty dataset")
+
+    train_df, val_df = _time_split(df)
+    X_tr = train_df[FEATURE_NAMES_V2].values
+    y_tr = train_df["label"].values
+    X_val = val_df[FEATURE_NAMES_V2].values
+    y_val = val_df["label"].values
+
+    pos_rate_tr = y_tr.mean()
+    pos_rate_val = y_val.mean()
+    log.info("v2 Train n=%d (pos %.3f) · Val n=%d (pos %.3f)",
+             len(train_df), pos_rate_tr, len(val_df), pos_rate_val)
+
+    train_set = lgb.Dataset(X_tr, label=y_tr, feature_name=list(FEATURE_NAMES_V2))
+    val_set = lgb.Dataset(X_val, label=y_val, feature_name=list(FEATURE_NAMES_V2),
+                          reference=train_set)
+    params = {
+        "objective": "binary", "metric": "binary_logloss",
+        "learning_rate": 0.05, "num_leaves": 31, "max_depth": 6,
+        "min_data_in_leaf": 20, "feature_fraction": 0.9,
+        "bagging_fraction": 0.9, "bagging_freq": 3, "verbose": -1,
+    }
+    booster = lgb.train(params, train_set, num_boost_round=400,
+                        valid_sets=[val_set], valid_names=["val"],
+                        callbacks=[lgb.early_stopping(stopping_rounds=30, verbose=False)])
+
+    raw_val = booster.predict(X_val)
+    try:
+        auc = roc_auc_score(y_val, raw_val) if len(set(y_val)) > 1 else float("nan")
+    except Exception:
+        auc = float("nan")
+    ll = log_loss(y_val, np.clip(raw_val, 1e-6, 1 - 1e-6))
+
+    calibrator = None
+    if len(set(y_val)) > 1:
+        calibrator = IsotonicRegression(out_of_bounds="clip")
+        calibrator.fit(raw_val, y_val)
+
+    metrics = {
+        "n_train": int(len(train_df)), "n_val": int(len(val_df)),
+        "pos_rate_train": float(pos_rate_tr), "pos_rate_val": float(pos_rate_val),
+        "val_auc": float(auc), "val_logloss": float(ll),
+        "best_iteration": int(booster.best_iteration or booster.current_iteration()),
+    }
+    log.info("v2 Val AUC=%.4f logloss=%.4f best_iter=%d",
+             metrics["val_auc"], metrics["val_logloss"], metrics["best_iteration"])
+
+    # feature importance — regime 효과 확인
+    fi = booster.feature_importance(importance_type="gain")
+    fi_pairs = sorted(zip(FEATURE_NAMES_V2, fi), key=lambda x: -x[1])
+    total = sum(fi) or 1
+    log.info("v2 Top 10 features (gain):")
+    for name, g in fi_pairs[:10]:
+        log.info("  %-20s %5.1f%%", name, g / total * 100)
+
+    from engine.models.lgbm import TrainedModel
+    return TrainedModel(
+        booster=booster, calibrator=calibrator,
+        feature_names=list(FEATURE_NAMES_V2),
+        trained_at=datetime.now().isoformat(),
+        val_metrics=metrics,
+        config={"label_mode": "dynamic_exit_v2", "n_features": 18},
+    )
+
+
+def run_training_v2(
+    markets: Optional[List[str]] = None,
+    days: int = 730,
+    universe_size: Optional[int] = None,
+    model_path: Optional[str] = None,
+) -> dict:
+    """v2 end-to-end. KR 전용 (regime fetch는 KR만 검증). model_path 미지정 시
+    mint/data/models/mint_lgbm_v2.joblib."""
+    markets = markets or ["KOSPI", "KOSDAQ"]
+    log.info("v2 training — markets=%s days=%d universe=%s",
+             markets, days, universe_size if universe_size else "default")
+    df = build_dataset_v2(markets, days=days, universe_size=universe_size)
+    log.info("v2 Dataset — %d samples (pos rate %.3f)",
+             len(df), df["label"].mean() if not df.empty else 0)
+    if df.empty:
+        return {"error": "empty dataset", "n_samples": 0}
+
+    os.makedirs("mint/data/models", exist_ok=True)
+    suffix = _market_suffix(markets)
+    csv_path = f"mint/data/models/training_data_{suffix}_v2_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    df.to_csv(csv_path, index=False, encoding="utf-8")
+    log.info("v2 Dataset saved → %s", csv_path)
+
+    trained = train_model_v2(df)
+    from engine.models.lgbm import clear_model_cache
+    save_path = model_path or "mint/data/models/mint_lgbm_v2.joblib"
+    trained.save(save_path)
+    clear_model_cache()
+    return {
+        "n_samples": int(len(df)),
+        "pos_rate": float(df["label"].mean()),
+        "metrics": trained.val_metrics,
+        "model_path": save_path,
+        "dataset_csv": csv_path,
+    }
 
 
 def train_model(
