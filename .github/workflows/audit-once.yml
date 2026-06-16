@@ -1,0 +1,45 @@
+name: Mint Audit (one-shot)
+
+# 1회용 read-only audit — audit_live_pipeline.py 를 live DB에 대해 실행 후
+# CSV 3종 (signals / outcomes_daily / funnel_daily) 을 artifact 로 업로드.
+# 스케줄 없음, 수동 트리거 전용. DB 변경 없음.
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'audit window (days)'
+        required: false
+        default: '30'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: 'mint/requirements-runtime.txt'
+
+      - name: Install deps
+        run: pip install -r mint/requirements-runtime.txt
+
+      - name: Run audit
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python -X utf8 mint/scripts/audit_live_pipeline.py \
+            --days ${{ inputs.days }} \
+            --output-dir mint/data/audit
+
+      - name: Upload audit artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mint-audit
+          path: mint/data/audit/
+          if-no-files-found: error
+          retention-days: 7
