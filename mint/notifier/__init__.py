@@ -43,12 +43,20 @@ _HEARTBEAT_STATE = os.path.join(
 
 def _enabled() -> bool:
     if os.getenv("MINT_NOTIFY_ENABLED", "true").lower() not in ("1", "true", "yes"):
+        log.warning("Notify disabled by MINT_NOTIFY_ENABLED env")
         return False
     try:
         from notifier import kakao  # 지연 import
-    except Exception:
+    except Exception as e:
+        log.warning("Notify disabled — kakao module import failed: %s", e)
         return False
-    return kakao.is_configured()
+    if not kakao.config.kakao.rest_api_key:
+        log.warning("Notify disabled — KAKAO_REST_API_KEY not set in this runtime")
+        return False
+    if kakao._load_tokens() is None:
+        log.warning("Notify disabled — kakao token not found in DB or file")
+        return False
+    return True
 
 
 def _market_emoji(market: str) -> str:
@@ -171,9 +179,15 @@ def _format_buy_signal(sig: dict) -> str:
         if lp >= 0.05:  # 5% 미만은 표시 의미 약함
             limitup_line = f"⚡ D+1 강한상승 P={lp*100:.1f}% {tag}".strip()
 
+    # 2026-06-16 N1 픽스: status='expired'인 시그널은 지연 catch-up — 라벨로 정직 표시.
+    stale_header = ""
+    if sig.get("status") == "expired":
+        stale_header = "📝 [지연 발급 · 이미 만료 · 참고용]"
+
     # 순서: 핵심(잘리면 안 됨) → 부가(잘려도 OK)
     # truncate가 라인 단위라 아래쪽부터 잘림
     lines = [
+        stale_header,
         f"🟢 [Mint 매수] {_market_emoji(market)} {name} ({sig['ticker']})",
         f"기준가 {_format_price(ref, market)}",
         f"🎯 {_format_price(target, market)} ({target_ret:+.1f}%) / 손절 {_format_price(stop, market)} ({stop_ret:+.1f}%)",

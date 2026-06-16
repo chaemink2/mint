@@ -83,19 +83,24 @@ def _process_expiries():
 
 
 def _process_unnotified_buys():
-    """이전 scan에서 logged됐지만 카톡 미발송된 active BUY 시그널 catch-up.
+    """이전 scan에서 logged됐지만 카톡 미발송된 BUY 시그널 catch-up.
 
-    P1a 픽스 (6/4~6/9 60+건 카톡 누락 패턴): GHA scan timeout cancel 시
-    시그널은 DB에 저장됐으나 notify_buy_signals 호출 전에 죽음. 다음 scan 시작 시
-    아직 valid_until 안인 active BUY 시그널을 catch-up 발송.
-    만료된 건 _process_expiries로 따로 처리되므로 여기서 제외.
+    P1a 픽스 (6/4~6/9 60+건 누락): GHA scan cancel 시 notify 호출 전 죽음.
+    N1 픽스 (2026-06-16): GHA cron 지연이 valid_until(30분)을 넘기거나
+    dashboard/local trigger의 kakao no-op로 미발송된 시그널이 다음 scan 도착 시
+    이미 `status='expired'`가 되어 active-only 필터가 못 잡았음.
+    include_expired_hours=4로 최근 4h TIME-만료 unnotified까지 포함 발송.
     """
     try:
-        pending = unnotified_buy_signals(limit=20)
+        pending = unnotified_buy_signals(limit=20, include_expired_hours=4)
         if not pending:
             return
         ids = [int(s["id"]) for s in pending]
-        log.info("Catch-up notify: %d unnotified BUY signal(s)", len(ids))
+        n_expired = sum(1 for s in pending if s.get("status") == "expired")
+        log.info(
+            "Catch-up notify: %d unnotified BUY signal(s) (active=%d, expired=%d)",
+            len(ids), len(ids) - n_expired, n_expired,
+        )
         _notify_buys(ids)
     except Exception as e:
         log.warning("catch-up buy notify failed: %s", e)

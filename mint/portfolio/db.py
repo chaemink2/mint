@@ -531,22 +531,37 @@ def mark_expiry_notified(signal_ids: List[int]) -> None:
         conn.execute(stmt, {"ids": list(signal_ids)})
 
 
-def unnotified_buy_signals(limit: int = 20) -> List[Dict]:
-    """발급됐지만 매수 카톡 아직 못 보낸 BUY 시그널 (active 상태만).
+def unnotified_buy_signals(limit: int = 20, include_expired_hours: int = 0) -> List[Dict]:
+    """발급됐지만 매수 카톡 아직 못 보낸 BUY 시그널.
 
-    6/4~6/9 패턴 픽스: GHA scan timeout cancel 시 시그널은 DB에 logged됐으나
-    notify_buy_signals 호출 전에 죽어 카톡 미발송. 다음 scan 시작 시 catch-up.
-    만료된 시그널은 expiry_notified로 처리되므로 여기서 제외.
+    6/4~6/9 패턴: GHA scan timeout cancel 시 시그널은 DB에 logged됐으나 notify
+    호출 전에 죽어 카톡 미발송. 다음 scan 시작 시 catch-up.
+
+    2026-06-16 (N1 픽스): GHA cron이 valid_until(30분)보다 더 지연되거나
+    dashboard/local trigger의 kakao가 silently no-op이면, 다음 scan 도착 시점에
+    시그널이 이미 `status='expired'`라 기존 active-only 필터가 못 잡았음.
+    include_expired_hours > 0이면 최근 N시간 안에 TIME으로 만료된 unnotified BUY도
+    포함 — 사용자가 "뭐가 추천됐는지" 최소한 사후에 볼 수 있게.
+
+    STOP_HIT/TARGET_HIT 만료는 이미 가격 결판 — 늦은 매수 권장은 위험하므로 제외.
     """
+    where_expired = ""
+    params: Dict = {"limit": int(limit)}
+    if include_expired_hours > 0:
+        where_expired = """
+              OR (status = 'expired'
+                  AND (expiry_reason IS NULL OR expiry_reason = 'TIME')
+                  AND created_at >= :since)"""
+        params["since"] = (now_kst() - timedelta(hours=int(include_expired_hours))).isoformat()
     with get_conn() as conn:
         rows = conn.execute(
-            text("""SELECT * FROM signals
+            text(f"""SELECT * FROM signals
                WHERE signal_type = 'BUY'
-                 AND status = 'active'
                  AND (notified IS NULL OR notified = 0)
+                 AND (status = 'active'{where_expired})
                ORDER BY id ASC
                LIMIT :limit"""),
-            {"limit": int(limit)},
+            params,
         ).fetchall()
         return _rows_to_dicts(rows)
 
