@@ -85,6 +85,41 @@ def _fetch_top_n_pykrx(market: str, n: int) -> List[str]:
     return [str(t).zfill(6) for t in df_sorted.head(n).index.tolist()]
 
 
+# 2026-06-16 P1b: KR ETF/ETN 자동 제외. 6/16 카톡 4건 전부 채권 ETF였음 —
+# Mint 단기 매매 추천 대상 아님. NASDAQ cfa8326 패턴(공식 ETF 컬럼)과 달리
+# Naver는 ETF 라벨이 없어 종목명 prefix로 식별.
+# 주요 운용사 prefix + 채권/ETN 키워드. 보통주에 'KODEX/' 등이 우연히 들어갈
+# 확률은 사실상 0이므로 false positive 무시 가능.
+_KR_ETF_NAME_PREFIXES = (
+    "KODEX", "TIGER", "ACE", "KBSTAR", "HANARO", "RISE", "SOL",
+    "ARIRANG", "KOSEF", "PLUS", "KIWOOM", "1Q",
+)
+# ETN/일부 ETF 보통명에서 자주 보이는 키워드 (보통주 이름과 충돌 위험 낮은 것만).
+_KR_ETF_NAME_KEYWORDS = (
+    "레버리지", "인버스", "곱버스", "선물", " ETF", " ETN", "ETF(H)", "ETN(H)",
+)
+
+
+def is_kr_etf_name(name: Optional[str]) -> bool:
+    """KR ETF/ETN 종목명 식별. None/빈 이름은 False (안전).
+
+    rule_scanner의 evaluate_ticker 입구에서 호출 — bars fetch 후이지만 ML/분봉
+    호출 전이라 호출 비용 절약. _resolve_name 캐시로 lookup은 O(1).
+    """
+    if not name:
+        return False
+    n = name.strip()
+    if not n:
+        return False
+    for pref in _KR_ETF_NAME_PREFIXES:
+        if n.startswith(pref):
+            return True
+    for kw in _KR_ETF_NAME_KEYWORDS:
+        if kw in n:
+            return True
+    return False
+
+
 def _fetch_top_n_naver(market: str, n: int) -> List[str]:
     """Naver Finance 시가총액 랭킹 페이지 스크래핑. 인증 불필요.
 

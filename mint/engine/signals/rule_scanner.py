@@ -163,6 +163,14 @@ def evaluate_ticker_minute_first(
     if stats is not None:
         stats["evaluated"] = stats.get("evaluated", 0) + 1
 
+    # 2026-06-16 P1b: KR ETF/ETN 제외 — 비싼 분봉 fetch 전에 컷.
+    if market in ("KOSPI", "KOSDAQ"):
+        from data.universe import is_kr_etf_name
+        if is_kr_etf_name(_resolve_name(ticker, market)):
+            if stats is not None:
+                stats["skipped_etf"] = stats.get("skipped_etf", 0) + 1
+            return None
+
     # 1. 분봉 1차 발견 — 가장 비싼 호출이라 먼저 게이트
     from engine.signals.minute_rule import fetch_and_discover
     minute_info = fetch_and_discover(ticker, market=market)
@@ -283,6 +291,14 @@ def evaluate_ticker(
 
     if stats is not None:
         stats["evaluated"] = stats.get("evaluated", 0) + 1
+
+    # 2026-06-16 P1b: KR ETF/ETN 제외 (단기 매매 추천 대상 아님).
+    if market in ("KOSPI", "KOSDAQ"):
+        from data.universe import is_kr_etf_name
+        if is_kr_etf_name(_resolve_name(ticker, market)):
+            if stats is not None:
+                stats["skipped_etf"] = stats.get("skipped_etf", 0) + 1
+            return None
 
     sig = config.signal
     expected = _estimate_expected_return_1d(df)

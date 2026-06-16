@@ -44,7 +44,10 @@ jobs:
           KIS_APP_SECRET:       ${{ secrets.KIS_APP_SECRET }}
           MINT_USE_ML_CONFIDENCE:    'true'
           MINT_USE_MINUTE_RULE:      'true'
-          MINT_MIN_ML_CONFIDENCE:    '0.60'
+          # 2026-06-16 N2: 0.60 → 0.70 상향. 학습 baseline은 0.60·0.70 동일 precision(0.79)
+          # 였으나 6월 실 운영 decisive win_rate 19.6%. 학습-운영 분포 mismatch 의심 →
+          # 보수적 임계값으로 LOSS 48% 감소 시도. 일평균 1.3건 그대로 예상.
+          MINT_MIN_ML_CONFIDENCE:    '0.70'
           MINT_MIN_MINUTE_VOL_SPIKE: '2.0'
           # 2026-06-09: 600 유지 (사용자 의향 — 소형주 catch율 우선).
           # 600 자체는 timeout 원인 아님 (6/3 첫 success 15분 완료). 진짜 원인은 minute_first.
