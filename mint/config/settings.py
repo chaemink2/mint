@@ -73,8 +73,16 @@ class SignalConfig:
     - min_model_confidence: Step 3b ML 캘리브레이션 후에만 적용 (use_ml_confidence=True)
     """
     min_expected_return_1d: float = float(os.getenv("MINT_MIN_EXPECTED_RETURN", "0.03"))
+    # 2026-06-16 N3+ A: 6월 outcome 분석에서 exp_return 15%+ 시그널 47건이 거의 전멸
+    # (15~25%: dec 7.4% · 25%+: dec 0.0%). 모멘텀 과열 종목은 mean reversion 직격.
+    # cap을 12%로 두면 47건 / 186 중 LOSS만 잘려나감.
+    max_expected_return_1d: float = float(os.getenv("MINT_MAX_EXPECTED_RETURN", "0.12"))
     min_model_confidence: float = float(os.getenv("MINT_MIN_ML_CONFIDENCE", "0.70"))
     use_ml_confidence: bool = os.getenv("MINT_USE_ML_CONFIDENCE", "false").lower() == "true"
+    # 2026-06-16 N3+ C: dynamic exit OFF 옵션. 6월 outcome 격차 진단에서
+    # dynamic exit이 target을 3.5배(median +10.4%)로 키워 학습 라벨(+3%)과
+    # mismatch. fixed +3%/-2%/24h로 환원 시 학습-운영 라벨 정합.
+    use_dynamic_exit: bool = os.getenv("MINT_USE_DYNAMIC_EXIT", "true").lower() == "true"
     # 30 → 45: 5/21 실 데이터 진단 결과 모멘텀 통과 종목 risk 평균 41.4. 30은 모두 차단.
     # 사용자 결정 사안 변경(5/21): universe 200 정상화와 묶어 시그널 회복.
     max_risk_score: float = float(os.getenv("MINT_MAX_RISK_SCORE", "45"))

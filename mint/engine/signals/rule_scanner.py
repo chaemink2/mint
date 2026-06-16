@@ -214,10 +214,10 @@ def evaluate_ticker_minute_first(
     vol_ratio = _volume_ratio(df)
     rule_conf = _rule_score(df, expected, risk, vol_ratio)
 
-    # Dynamic exit
+    # Dynamic exit (2026-06-16 N3+ C: use_dynamic_exit=false면 fixed 환원)
     atr_pct = (risk / 500.0) if risk > 0 else 0.02
     from engine.market_regime import SUPPORTED_REGIME_MARKETS
-    if market in SUPPORTED_REGIME_MARKETS:
+    if sig.use_dynamic_exit and market in SUPPORTED_REGIME_MARKETS:
         from engine.market_regime import get_regime_or_sideways
         from engine.dynamic_exit import compute_dynamic_exit
         _regime = get_regime_or_sideways(market)
@@ -233,6 +233,12 @@ def evaluate_ticker_minute_first(
         stop_price = ref_price * (1 + sig.stop_loss)
         max_hold_hours_val = float(sig.max_hold_hours)
         regime_label_val = None
+        if market in SUPPORTED_REGIME_MARKETS:
+            try:
+                from engine.market_regime import get_regime_or_sideways
+                regime_label_val = get_regime_or_sideways(market).label
+            except Exception:
+                pass
         dynamic_target_pct = sig.target_return
         dynamic_stop_pct = sig.stop_loss
 
@@ -319,6 +325,11 @@ def evaluate_ticker(
 
     if expected < sig.min_expected_return_1d:
         return None
+    # 2026-06-16 N3+ A: 과열 모멘텀 cap. 6월 분석에서 15%+ 47건 거의 전멸 (mean reversion).
+    if expected > sig.max_expected_return_1d:
+        if stats is not None:
+            stats["skipped_exp_cap"] = stats.get("skipped_exp_cap", 0) + 1
+        return None
     if stats is not None:
         stats["passed_momentum"] = stats.get("passed_momentum", 0) + 1
 
@@ -356,9 +367,10 @@ def evaluate_ticker(
     # 2026-05-22 Dynamic exit — 시장 regime + 종목 ATR 기반 target/stop/hold
     # ML 모델은 binary classifier 그대로. target/stop/hold만 종목·상황별 동적.
     # 2026-05-26 NASDAQ 지원 추가 (^IXIC regime).
+    # 2026-06-16 N3+ C: use_dynamic_exit=false면 fixed +3%/-2%/24h 환원 (학습-운영 라벨 정합).
     atr_pct = (risk / 500.0) if risk > 0 else 0.02  # _risk_score = ATR_pct * 500
     from engine.market_regime import SUPPORTED_REGIME_MARKETS
-    if market in SUPPORTED_REGIME_MARKETS:
+    if sig.use_dynamic_exit and market in SUPPORTED_REGIME_MARKETS:
         from engine.market_regime import get_regime_or_sideways
         from engine.dynamic_exit import compute_dynamic_exit
         _regime = get_regime_or_sideways(market)
@@ -370,11 +382,17 @@ def evaluate_ticker(
         dynamic_target_pct = _de.target_pct
         dynamic_stop_pct = _de.stop_pct
     else:
-        # 미지원 시장 — 기존 고정값 유지
+        # dynamic exit OFF 또는 미지원 시장 — 기존 고정값. regime label만 정보용으로 attach.
         target_price = ref_price * (1 + sig.target_return)
         stop_price = ref_price * (1 + sig.stop_loss)
         max_hold_hours_val = float(sig.max_hold_hours)
         regime_label_val = None
+        if market in SUPPORTED_REGIME_MARKETS:
+            try:
+                from engine.market_regime import get_regime_or_sideways
+                regime_label_val = get_regime_or_sideways(market).label
+            except Exception:
+                pass
         dynamic_target_pct = sig.target_return
         dynamic_stop_pct = sig.stop_loss
 

@@ -44,10 +44,17 @@ jobs:
           KIS_APP_SECRET:       ${{ secrets.KIS_APP_SECRET }}
           MINT_USE_ML_CONFIDENCE:    'true'
           MINT_USE_MINUTE_RULE:      'true'
-          # 2026-06-16 N2: 0.60 → 0.70 상향. 학습 baseline은 0.60·0.70 동일 precision(0.79)
-          # 였으나 6월 실 운영 decisive win_rate 19.6%. 학습-운영 분포 mismatch 의심 →
-          # 보수적 임계값으로 LOSS 48% 감소 시도. 일평균 1.3건 그대로 예상.
+          # 2026-06-16 N2: 0.60 → 0.70. 6월 실 ML score 95%가 1.0 saturate라
+          # 임계값 자체 영향 미미하지만 안전 마진.
           MINT_MIN_ML_CONFIDENCE:    '0.70'
+          # 2026-06-16 N3+ A: exp_return 12% cap. 15%+ 47건이 6월 거의 전멸 (mean reversion).
+          MINT_MAX_EXPECTED_RETURN:  '0.12'
+          # 2026-06-16 N3+ B: dedup 4h → 24h. 반복 발급 폭주 차단
+          # (STRONG_BULL 86건 중 같은 종목 76% 반복, 매번 LOSS).
+          MINT_SIGNAL_DEDUP_H:       '24'
+          # 2026-06-16 N3+ C: dynamic exit OFF — target/stop이 학습 라벨과 mismatch였음
+          # (운영 target median +10.4% vs 학습 +3%). fixed +3%/-2%/24h 환원.
+          MINT_USE_DYNAMIC_EXIT:     'false'
           MINT_MIN_MINUTE_VOL_SPIKE: '2.0'
           # 2026-06-09: 600 유지 (사용자 의향 — 소형주 catch율 우선).
           # 600 자체는 timeout 원인 아님 (6/3 첫 success 15분 완료). 진짜 원인은 minute_first.

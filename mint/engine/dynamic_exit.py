@@ -27,8 +27,11 @@ log = logging.getLogger("mint.dynamic_exit")
 
 
 # Regime별 multiplier (target, stop, hold)
+# 2026-06-16 N3+ D: STRONG_BULL retracement 가설 검증 — 6월 86건 dec 11.5% (최악).
+# 이미 너무 올라간 종목은 mean reversion으로 떨어짐 → target 1.5→1.0, hold 1.5→1.0
+# 으로 보수화 (stop은 0.7 유지 — 빠른 손절). dynamic exit 다시 켤 때 안전.
 REGIME_MULT = {
-    "STRONG_BULL":  {"target": 1.5,  "stop": 0.7,  "hold": 1.5},
+    "STRONG_BULL":  {"target": 1.0,  "stop": 0.7,  "hold": 1.0},
     "BULL":         {"target": 1.2,  "stop": 0.85, "hold": 1.25},
     "SIDEWAYS":     {"target": 1.0,  "stop": 1.0,  "hold": 1.0},
     "BEAR":         {"target": 0.75, "stop": 0.9,  "hold": 0.75},
