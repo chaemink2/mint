@@ -95,8 +95,9 @@ class SignalConfig:
     minute_first: bool = os.getenv("MINT_MINUTE_FIRST", "false").lower() == "true"
 
     max_position_pct: float = 0.20
-    # 2026-06-01: 5 → 30, 시장별 카운터 분리(rule_scanner). 수동 매매라 사용자가 판단.
-    max_daily_buys: int = int(os.getenv("MINT_MAX_DAILY_BUYS", "30"))
+    # 2026-06-16: 30 → 5 환원. 6/1 28f36a6에서 사용자 합의 없이 5→30 변경된 것 픽스.
+    # 변경 금지 룰 위반(CLAUDE.md). 시장별 카운터 분리는 유지.
+    max_daily_buys: int = int(os.getenv("MINT_MAX_DAILY_BUYS", "5"))
 
 
 def _optional_int(env_name: str) -> Optional[int]:

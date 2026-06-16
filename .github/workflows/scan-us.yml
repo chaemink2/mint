@@ -51,7 +51,8 @@ jobs:
           # 분봉 1차 fetch는 1500 × ~500ms = 12.5분 (timeout 30 안전).
           MINT_WATCHLIST_SIZE:       '1500'
           MINT_MAX_RISK_SCORE:       '45'
-          MINT_MAX_DAILY_BUYS:       '30'
+          # 2026-06-16: 30 → 5 환원. 6/1 28f36a6 사용자 미합의 변경 픽스.
+          MINT_MAX_DAILY_BUYS:       '5'
           MINT_US_SCAN:              'true'
           # 2026-06-01: 분봉 1차 발견 모드 활성 (yfinance 5m 5d).
           # 500종목 × yfinance fetch ~8~13분/cron. timeout 25분 안에 충분.
