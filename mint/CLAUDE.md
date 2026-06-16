@@ -1,7 +1,89 @@
 # Mint 프로젝트 — 핸드오프 / 결정 기록
 
-> **마지막 업데이트**: 2026-05-27 (NASDAQ Stage 1+2+3 + UX 패치: 카톡 가로채기 fix · hold window 표시 · KST 통일.)
-> **다음 세션 픽업 시**: 아래 [🔁 다음 세션 픽업 가이드](#-다음-세션-픽업-가이드) 최우선 + `mint/HANDOFF_NASDAQ.md`
+> **마지막 업데이트**: 2026-06-16 (성능 회복 sprint — N1·N2·N3+ A/B/C/D · P1b · P1e · M1 재학습)
+> **다음 세션 픽업 시**: 아래 [📌 2026-06-17 검증 체크리스트](#-2026-06-17-검증-체크리스트) 최우선
+
+---
+
+## 📌 2026-06-17 검증 체크리스트
+
+**오늘 (2026-06-16) sprint 요약 — 7개 commit, 격차 진단·픽스 셔틀.**
+
+### 다음 cron 직후 (2026-06-17 09:07 KST) 확인 — 즉시
+1. **GHA scan-kr 실행 로그**
+   - `_enabled()` 사유 메시지 — env disabled/API key 없음/토큰 없음 중 어느 것? (N1 진단)
+   - `Catch-up notify: N unnotified BUY signal(s) (active=X, expired=Y)` 로그 라인 (N1)
+   - `funnel`에 `skipped_etf`, `skipped_exp_cap` 카운트 보임 (P1b, N3+ A)
+2. **첫 BUY 시그널 카톡 메시지**
+   - target % = +3% / stop % = -2% / hold = 24h (dynamic exit OFF 적용 확인, N3+ C)
+   - regime_label 표시는 유지됨 (정보용)
+   - ETF 종목 없음 (P1b 확인)
+3. **DB signals 테이블 (audit-once workflow `gh workflow run audit-once.yml -f days=2`)**
+   - target_price/ref_price ratio = 1.035 일관 (fixed 환원 확인)
+   - notified=1 비율 ≥ 80%
+   - 같은 종목 24h 안 반복 없음 (B 확인)
+
+### 1주 후 (2026-06-23 ±2일) 평가 — 핵심 검증
+**outcome 30~50건 누적 후 audit-once 재실행 (`gh workflow run audit-once.yml -f days=7`).**
+
+기준 비교:
+| 지표 | 6월 (적용 전) | 가설 (N3+ 후) | 실제 |
+|---|---|---|---|
+| decisive win_rate | 19.6% | 30~40% | TBD |
+| LOSS rate | 48.4% | 25~30% | TBD |
+| TIME_EXIT rate | 39.8% | 30% 이하 | TBD |
+| 일평균 BUY | 5건 (한도) | 1~3건 | TBD |
+| EV/거래 | −0.38% | +0.20%~ | TBD |
+
+판단 분기:
+- **가설 달성 (≥+10%p)**: M7 카드 C (외국인/기관 수급) 진입 — 진짜 도약
+- **부분 달성 (+5~10%p)**: M4 dynamic exit calibration (REGIME_MULT를 6월 outcome 기반 재정의)
+- **격차 그대로**: ML calibration 깨짐이 핵심 → live outcome으로 isotonic refit (cards E)
+
+### 1개월 후 (2026-07-15) — 모델 진화 결정
+- KR outcome 100건+ 누적되면 M1 v3 학습 (실 운영 분포 학습)
+- 사용자 보류 액션 #5 카카오 refresh_token 재발급 (5/18 발급 → 7월 중순 만료)
+
+### 🛑 롤백 절차 (성능이 오히려 악화 시)
+1. `cp mint/data/models/mint_lgbm_kr_v1_519c_backup.joblib mint/data/models/mint_lgbm.joblib && git commit && git push`
+2. scan-kr.yml에서 `MINT_USE_DYNAMIC_EXIT=true`, `MINT_SIGNAL_DEDUP_H=4`, `MINT_MAX_EXPECTED_RETURN` 제거, `MINT_MIN_ML_CONFIDENCE=0.60`
+3. settings.py max_daily_buys 5 → 30 환원 (단, 사용자 합의 후)
+
+---
+
+## 2026-06-16 sprint — 7 commits 요약
+
+| Commit | 카드 | 변경 |
+|---|---|---|
+| `5ce41d5` | (인프라) | audit-once workflow 추가 |
+| `e6a0625` | P1e | MAX_DAILY_BUYS 30→5 환원 (6/1 28f36a6 미합의 픽스) |
+| `ad9d03e` | N1 | 카톡 발송율 진단·픽스 (4h expired catch-up + stale 라벨 + _enabled 로그) |
+| `e5bc28d` | N2+P1b | ML 임계값 0.60→0.70 (실 효과 작음 — score saturate) + KR ETF prefix 12개 제외 |
+| `2ef85ed` | M1 | v2a 재학습 (regime feature, AUC 0.582→0.597) — 라이브 도달률은 격차 미해결 |
+| `0e63dca` | **N3+ A/B/C/D** | 6월 outcome 격차 진단 기반 4종 fix (아래) |
+
+### N3+ 격차 5-layer 메커니즘 (2026-06-16 분석)
+6월 outcome 186건에서 학습 79% vs 실 19.6% 격차의 원인:
+
+| Layer | 원인 | 데이터 근거 | 픽스 |
+|---|---|---|---|
+| 1 | Dynamic exit이 target 3.5배(+10.4%)로 키움 | learning label과 mismatch (-50%p) | C: OFF |
+| 2 | ML calibration 깨짐 (score 95%가 1.0) | 임계값 무력 | N2(부분), 추후 E recalibrate |
+| 3 | STRONG_BULL retracement | 86건 dec 11.5% vs BEAR 31% | D: REGIME_MULT 보수화 |
+| 4 | expected_return 15%+ 역신호 | 47건 거의 전멸 (0~7%) | A: cap 12% |
+| 5 | 같은 종목 STRONG_BULL 반복 발급 | NAVER 4/0/4, 삼성생명 4/0/4 | B: dedup 4h→24h |
+
+### N3+ 부분 결론 — 카드 우선순위 갱신
+- **승률에 직접**: A·B·C·D는 가설 +10~20%p 효과. M7 카드 C는 격차 해소 후 진입.
+- **M4 dynamic exit calibration**: D로 임시 보수화했으나 6월 outcome 기반 grid search는 별도.
+- **E (ML live recalibration)**: 격차 layer 2 직격. A/B/C 결과 본 후 진입 결정.
+
+### 보존된 운영 변경 (2026-06-16)
+- ML 운영 모델: v1 5/19c (138KB) → v2a (174KB, regime feature 포함)
+- backup: `mint_lgbm_kr_v1_519c_backup.joblib` (gitignore, 로컬 보관 — 롤백 1cp)
+- v2 (regime+dynamic 라벨, AUC 0.549 미채택) 별도 파일 `mint_lgbm_v2.joblib`
+
+---
 > **Cursor 변경 이력**: `CURSOR.md` · **Cursor 검토 결과**: `REVIEW_CURSOR.md` · **Cloud 이전 가이드**: `CLOUD_MIGRATION.md` · **사용자 액션 가이드**: `CLOUD_MIGRATION_USER_GUIDE.md` · **1주 운영 플레이북**: `OPERATION_WEEK1.md` · **NASDAQ 확장 인수인계**: `HANDOFF_NASDAQ.md`
 
 ---
