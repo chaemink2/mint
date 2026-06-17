@@ -82,7 +82,11 @@ class SignalConfig:
     # 2026-06-16 N3+ C: dynamic exit OFF 옵션. 6월 outcome 격차 진단에서
     # dynamic exit이 target을 3.5배(median +10.4%)로 키워 학습 라벨(+3%)과
     # mismatch. fixed +3%/-2%/24h로 환원 시 학습-운영 라벨 정합.
-    use_dynamic_exit: bool = os.getenv("MINT_USE_DYNAMIC_EXIT", "true").lower() == "true"
+    # 2026-06-17: default "true" → "false" hotfix. 6/17 12:50 KST scan에서
+    # GHA env(MINT_USE_DYNAMIC_EXIT=false)는 적용됐으나 사용자 PC/Streamlit Cloud
+    # 트리거 시 env override 없어 default true로 동작 → 6건이 다시 dynamic 발급.
+    # default false로 두면 어디서 트리거되든 fixed. 다시 켜려면 env "true" 명시.
+    use_dynamic_exit: bool = os.getenv("MINT_USE_DYNAMIC_EXIT", "false").lower() == "true"
     # 30 → 45: 5/21 실 데이터 진단 결과 모멘텀 통과 종목 risk 평균 41.4. 30은 모두 차단.
     # 사용자 결정 사안 변경(5/21): universe 200 정상화와 묶어 시그널 회복.
     max_risk_score: float = float(os.getenv("MINT_MAX_RISK_SCORE", "45"))
