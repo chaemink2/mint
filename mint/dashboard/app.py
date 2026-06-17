@@ -20,6 +20,8 @@ sys.path.insert(0, MINT_ROOT)
 from config.settings import config
 from config.tz import now_kst
 from data import kis_client
+from data import krx_client  # 2026-06-17: 현재가 Naver fallback용. 상단 import로 stale cache 방지.
+from data import us_client   # 2026-06-17: NASDAQ 현재가용.
 from data.collector import fetch_bars
 from data.market_index import get_market_summary
 from engine.signals.exit_strategy import evaluate_position
@@ -568,7 +570,8 @@ elif page == "🎯 추천 시그널":
 
                 window_badge = f'<span class="{badge_class}">{badge_text} · {remaining_h:.1f}h 남음</span>'
 
-                # 2026-06-17: 현재가 폴백 — KIS → Naver(KR) / yfinance(NASDAQ)
+                # 2026-06-17: 현재가 폴백 — KIS → Naver(KR) / yfinance(NASDAQ).
+                # 모듈 attribute로 접근 — 상단 from-import 캐시에 덜 민감.
                 stale_badge = ""
                 live_price = None
                 price_source = ""
@@ -578,14 +581,12 @@ elif page == "🎯 추천 시그널":
                         live_price = kp.price
                         price_source = "KIS"
                     else:
-                        from data.krx_client import get_current_price_naver
-                        np_ = get_current_price_naver(s["ticker"])
+                        np_ = getattr(krx_client, "get_current_price_naver", lambda _t: None)(s["ticker"])
                         if np_:
                             live_price = np_
                             price_source = "Naver"
                 elif s["market"] == "NASDAQ":
-                    from data.us_client import get_current_price as get_us_price
-                    up = get_us_price(s["ticker"])
+                    up = getattr(us_client, "get_current_price", lambda _t: None)(s["ticker"])
                     if up:
                         live_price = up
                         price_source = "yf"
