@@ -103,7 +103,8 @@ def get_stock_name(ticker: str) -> str:
 
 
 # 2026-06-17: dashboard 추천 시그널 탭 현재가 표시용. KR(KIS)과 시그니처 통일.
-_PRICE_CACHE: dict[str, tuple[float, float]] = {}  # ticker -> (ts, price)
+# Note: annotation 없이 dict — Streamlit Cloud python 3.8 호환 (PEP 585 회피).
+_PRICE_CACHE = {}  # ticker -> (ts, price)
 _PRICE_CACHE_TTL_SEC = 60
 
 

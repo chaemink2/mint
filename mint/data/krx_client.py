@@ -151,8 +151,9 @@ def _fetch_name_naver(ticker: str) -> Optional[str]:
 
 
 # 2026-06-17: dashboard 추천 시그널 탭 현재가 fallback. KIS 키 없는 환경
-# (Streamlit Cloud / 사용자 PC 일부)에서 작동. Naver Finance 스크래핑.
-_NAVER_PRICE_CACHE: dict[str, tuple[float, float]] = {}  # ticker -> (ts, price)
+# (Streamlit Cloud / 사용자 PC 일부)에서 작동. Naver Finance 모바일 API.
+# Note: annotation 없이 dict — Streamlit Cloud python 3.8 호환 (PEP 585 회피).
+_NAVER_PRICE_CACHE = {}  # ticker -> (ts, price)
 _NAVER_PRICE_TTL_SEC = 60
 
 

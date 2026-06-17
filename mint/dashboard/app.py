@@ -39,32 +39,100 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Pretendard:wght@300;400;500;600&display=swap');
-html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Pretendard:wght@300;400;500;600;700&display=swap');
 
-/* 모바일 친화: 컴팩트 헤더 */
+/* 2026-06-17: light/dark + 인앱브라우저 모두 가독성 보장 테마.
+   - alpha 기반 배경 (양쪽 모드 둘 다 묽게 적용)
+   - color는 prefers-color-scheme 미디어쿼리로 분기
+   - 모든 텍스트 명도대비 ≥ 4.5:1 (WCAG AA)
+   - 강제 색 지정 최소화 → Streamlit theme 따름 */
+
+:root { color-scheme: light dark; }
+html, body, [class*="css"], div[data-testid] { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif; }
+code, pre, .stCode { font-family: 'JetBrains Mono', 'Menlo', monospace; }
+
+h1, h2, h3 { font-weight: 600 !important; letter-spacing: -0.01em; }
 h2 { margin-top: 0.5rem !important; margin-bottom: 0.5rem !important; }
+h3 { margin-top: 1rem !important; margin-bottom: 0.4rem !important; font-size: 1.05rem !important; }
 .block-container { padding-top: 1.5rem; }
 
-.signal-buy { background: rgba(35, 134, 54, 0.15); border: 1px solid rgba(35, 134, 54, 0.4); border-radius: 8px; padding: 12px 16px; margin: 6px 0; }
-.signal-hold { background: rgba(120, 120, 120, 0.10); border: 1px solid rgba(150, 150, 150, 0.30); border-radius: 8px; padding: 12px 16px; margin: 6px 0; }
-.tag-fresh-window { background: #1e4a2d; color: #7ee787; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 6px; }
-.tag-hold-window { background: #3a3a1e; color: #d4d4a1; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 6px; }
-.tag-kospi { background: #1e3a5f; color: #58a6ff; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
-.tag-kosdaq { background: #2d1e5f; color: #d2a8ff; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
-.tag-nasdaq { background: #3a2d1e; color: #ffb454; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
-.tag-stale { background: #4a1e1e; color: #ff7b72; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 6px; }
-.tag-fresh { background: #1e4a2d; color: #7ee787; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 6px; }
-.advice-sell { background: rgba(248, 81, 73, 0.18); border: 1px solid rgba(248, 81, 73, 0.5); border-radius: 6px; padding: 8px 12px; }
-.advice-consider { background: rgba(240, 136, 62, 0.18); border: 1px solid rgba(240, 136, 62, 0.5); border-radius: 6px; padding: 8px 12px; }
-.advice-hold { background: rgba(63, 185, 80, 0.10); border: 1px solid rgba(63, 185, 80, 0.35); border-radius: 6px; padding: 8px 12px; }
-[data-testid="stSidebar"] { background: #0d1117; border-right: 1px solid #21262d; }
+/* 시그널 컨테이너 — alpha 기반, 양쪽 모드 호환 */
+.signal-buy, .signal-hold {
+    border-radius: 10px; padding: 14px 18px; margin: 8px 0; line-height: 1.55;
+    backdrop-filter: blur(2px);
+}
+.signal-buy {
+    background: rgba(34, 197, 94, 0.10);
+    border: 1px solid rgba(34, 197, 94, 0.35);
+}
+.signal-hold {
+    background: rgba(148, 163, 184, 0.08);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+}
+@media (prefers-color-scheme: dark) {
+    .signal-buy  { background: rgba(34, 197, 94, 0.14); border-color: rgba(34, 197, 94, 0.45); }
+    .signal-hold { background: rgba(148, 163, 184, 0.12); border-color: rgba(148, 163, 184, 0.35); }
+}
 
-/* 모바일에서 컬럼 간격 */
+/* 인라인 code (ticker) — 명도대비 보장 */
+.signal-buy code, .signal-hold code {
+    background: rgba(148, 163, 184, 0.18); padding: 1px 6px; border-radius: 4px;
+    font-size: 0.9em; font-weight: 500;
+}
+
+/* === Pill / Tag — light/dark 분기 ===
+   pattern: 배경 alpha 12~18%, 글자 진한 톤(light) / 밝은 톤(dark)
+   각 의미별 hue 다름: green=긍정/신선, amber=주의, red=위험/만료,
+   blue=KOSPI, purple=KOSDAQ, orange=NASDAQ. */
+.tag-fresh-window, .tag-hold-window, .tag-kospi, .tag-kosdaq, .tag-nasdaq,
+.tag-stale, .tag-fresh {
+    padding: 2px 10px; border-radius: 999px; font-size: 11px;
+    font-weight: 600; margin-left: 6px; letter-spacing: 0;
+    display: inline-block; vertical-align: 2px;
+}
+/* light mode defaults */
+.tag-fresh-window { background: rgba(22, 163, 74, 0.16); color: #15803d; }
+.tag-hold-window  { background: rgba(202, 138, 4, 0.16); color: #a16207; }
+.tag-kospi        { background: rgba(37, 99, 235, 0.14); color: #1d4ed8; }
+.tag-kosdaq       { background: rgba(147, 51, 234, 0.14); color: #7e22ce; }
+.tag-nasdaq       { background: rgba(234, 88, 12, 0.14); color: #c2410c; }
+.tag-stale        { background: rgba(220, 38, 38, 0.16); color: #b91c1c; }
+.tag-fresh        { background: rgba(22, 163, 74, 0.16); color: #15803d; }
+/* dark mode override */
+@media (prefers-color-scheme: dark) {
+    .tag-fresh-window { background: rgba(34, 197, 94, 0.20); color: #86efac; }
+    .tag-hold-window  { background: rgba(250, 204, 21, 0.18); color: #fde68a; }
+    .tag-kospi        { background: rgba(96, 165, 250, 0.18); color: #93c5fd; }
+    .tag-kosdaq       { background: rgba(192, 132, 252, 0.18); color: #d8b4fe; }
+    .tag-nasdaq       { background: rgba(251, 146, 60, 0.20); color: #fdba74; }
+    .tag-stale        { background: rgba(239, 68, 68, 0.20); color: #fca5a5; }
+    .tag-fresh        { background: rgba(34, 197, 94, 0.20); color: #86efac; }
+}
+
+/* 매도 권고 박스 */
+.advice-sell     { background: rgba(220, 38, 38, 0.10); border: 1px solid rgba(220, 38, 38, 0.40); border-radius: 8px; padding: 10px 14px; }
+.advice-consider { background: rgba(234, 88, 12, 0.10); border: 1px solid rgba(234, 88, 12, 0.40); border-radius: 8px; padding: 10px 14px; }
+.advice-hold     { background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.30); border-radius: 8px; padding: 10px 14px; }
+@media (prefers-color-scheme: dark) {
+    .advice-sell     { background: rgba(239, 68, 68, 0.18); border-color: rgba(239, 68, 68, 0.50); }
+    .advice-consider { background: rgba(251, 146, 60, 0.16); border-color: rgba(251, 146, 60, 0.50); }
+    .advice-hold     { background: rgba(34, 197, 94, 0.12); border-color: rgba(34, 197, 94, 0.40); }
+}
+
+/* 사이드바 — 강제 색 지정 제거. Streamlit 기본 theme 따름.
+   이전엔 #0d1117(다크) 강제했으나 light 모드 사용자 어색했음.
+   미세한 우측 border만 유지. */
+[data-testid="stSidebar"] { border-right: 1px solid rgba(148, 163, 184, 0.18); }
+
+/* 시그널 카드 안 em(이태릭) — 색 너무 흐려서 안 보이는 케이스 보강 */
+.signal-buy em, .signal-hold em { opacity: 0.85; font-style: normal; font-size: 0.92em; }
+
+/* 모바일 / 카톡 인앱 브라우저 */
 @media (max-width: 768px) {
     .block-container { padding-left: 0.5rem; padding-right: 0.5rem; }
     h1 { font-size: 1.5rem !important; }
     h2 { font-size: 1.2rem !important; }
+    .signal-buy, .signal-hold { padding: 12px 14px; }
 }
 </style>
 """,
