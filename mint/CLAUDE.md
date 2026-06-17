@@ -61,6 +61,12 @@
 | `e5bc28d` | N2+P1b | ML 임계값 0.60→0.70 (실 효과 작음 — score saturate) + KR ETF prefix 12개 제외 |
 | `2ef85ed` | M1 | v2a 재학습 (regime feature, AUC 0.582→0.597) — 라이브 도달률은 격차 미해결 |
 | `0e63dca` | **N3+ A/B/C/D** | 6월 outcome 격차 진단 기반 4종 fix (아래) |
+| `a5517a3` | (docs) | CLAUDE.md 검증 체크리스트 |
+| `ac4324b` | N3+ C hotfix | use_dynamic_exit default true→false (GHA 외 트리거 환경 cover) |
+| `8b71ae9` | UI | 추천 시그널 탭 현재가 표시 (KR Naver 모바일 API + NASDAQ yfinance) + target/stop 거리 |
+| `4d2a161` | UI hotfix | ImportError(PEP 585) 해소 + light/dark 모두 가독성 테마 (WCAG AA) |
+| `06c4201` | UI | import getattr 패턴으로 stale cache 내성 |
+| `30fa78f` | UI | Linear/Plausible 스타일 — st.metric stat card + 보유 윈도우 mini card |
 
 ### N3+ 격차 5-layer 메커니즘 (2026-06-16 분석)
 6월 outcome 186건에서 학습 79% vs 실 19.6% 격차의 원인:
