@@ -129,11 +129,101 @@ h3 { margin-top: 1rem !important; margin-bottom: 0.4rem !important; font-size: 1
 /* 시그널 카드 안 em(이태릭) — 색 너무 흐려서 안 보이는 케이스 보강 */
 .signal-buy em, .signal-hold em { opacity: 0.85; font-style: normal; font-size: 0.92em; }
 
+/* === 2026-06-17 디자인 업그레이드 — Linear/Plausible 스타일 ===
+   - st.metric을 진짜 stat card로 (border + bg + padding + hover)
+   - 보유 윈도우 항목을 mini card (시장 pill + 종목명 + 잔여 시간 right)
+   - 헤딩 위계 명확화 (h1 = 24px / h2 = 18px / h3 = 14px upper)
+   - section spacing, hr 자연스럽게 */
+
+/* h2/h3 sentence-style, small letter-spacing */
+h1 { font-size: 1.6rem !important; font-weight: 700 !important; }
+h2 { font-size: 1.25rem !important; margin-top: 1.25rem !important; margin-bottom: 0.75rem !important; }
+h3 { font-size: 1rem !important; margin-top: 1.5rem !important; margin-bottom: 0.5rem !important;
+     color: var(--text-color, inherit); opacity: 0.95; }
+
+/* Streamlit metric card 강화 — Linear 스타일 */
+[data-testid="stMetric"] {
+    background: rgba(148, 163, 184, 0.05);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 12px;
+    padding: 14px 16px;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+}
+[data-testid="stMetric"]:hover {
+    border-color: rgba(148, 163, 184, 0.35);
+}
+@media (prefers-color-scheme: dark) {
+    [data-testid="stMetric"] {
+        background: rgba(148, 163, 184, 0.06);
+        border-color: rgba(148, 163, 184, 0.20);
+    }
+}
+[data-testid="stMetricLabel"] {
+    font-size: 0.78rem !important;
+    font-weight: 500 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.72;
+}
+[data-testid="stMetricValue"] {
+    font-size: 1.7rem !important;
+    font-weight: 600 !important;
+    font-feature-settings: "tnum";
+    line-height: 1.2;
+}
+[data-testid="stMetricDelta"] {
+    font-size: 0.85rem !important;
+    font-weight: 500 !important;
+    font-feature-settings: "tnum";
+}
+
+/* 보유 윈도우 / 매수 적기 mini card (대시보드 페이지) */
+.mini-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; margin: 4px 0;
+    background: rgba(148, 163, 184, 0.05);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 8px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+.mini-row:hover {
+    background: rgba(148, 163, 184, 0.10);
+    border-color: rgba(148, 163, 184, 0.28);
+}
+@media (prefers-color-scheme: dark) {
+    .mini-row { background: rgba(148, 163, 184, 0.06); border-color: rgba(148, 163, 184, 0.18); }
+    .mini-row:hover { background: rgba(148, 163, 184, 0.12); border-color: rgba(148, 163, 184, 0.30); }
+}
+.mini-row .lhs { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mini-row .mkt {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+    padding: 2px 7px; border-radius: 4px;
+    background: rgba(148, 163, 184, 0.16);
+    flex-shrink: 0;
+}
+.mini-row .mkt.kr { background: rgba(37, 99, 235, 0.14); color: #1d4ed8; }
+.mini-row .mkt.us { background: rgba(234, 88, 12, 0.14); color: #c2410c; }
+@media (prefers-color-scheme: dark) {
+    .mini-row .mkt.kr { background: rgba(96, 165, 250, 0.18); color: #93c5fd; }
+    .mini-row .mkt.us { background: rgba(251, 146, 60, 0.20); color: #fdba74; }
+}
+.mini-row .name { font-weight: 500; font-size: 0.95em; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }
+.mini-row .rhs { font-size: 0.82em; opacity: 0.68; font-feature-settings: "tnum";
+                 flex-shrink: 0; margin-left: 8px; }
+
+/* hr 부드럽게 */
+hr { margin: 1.5rem 0 !important; border-color: rgba(148, 163, 184, 0.15) !important; }
+
+/* section caption (h3 아래 안내문) */
+.section-caption { font-size: 0.85rem; opacity: 0.68; margin: -0.3rem 0 0.8rem 0; }
+
 /* 모바일 / 카톡 인앱 브라우저 */
 @media (max-width: 768px) {
     .block-container { padding-left: 0.5rem; padding-right: 0.5rem; }
-    h1 { font-size: 1.5rem !important; }
-    h2 { font-size: 1.2rem !important; }
+    h1 { font-size: 1.4rem !important; }
+    h2 { font-size: 1.1rem !important; }
+    [data-testid="stMetricValue"] { font-size: 1.4rem !important; }
     .signal-buy, .signal-hold { padding: 12px 14px; }
 }
 </style>
@@ -356,8 +446,8 @@ if page == "📊 대시보드":
             else:
                 col.metric(f"{code} regime", "—", "조회 실패")
         st.caption(
-            "Regime은 dynamic exit(target/stop/holding)에 반영됨. "
-            "강세→길게 잡고 작은 stop / 약세→짧게 자르고 작은 target. "
+            "2026-06-16 이후 dynamic exit OFF — fixed +3.5% target / -2% stop / 24h hold. "
+            "Regime은 ML 모델 입력 피처 + 진단/표시용으로 유지. "
             "NASDAQ regime은 ^IXIC 일봉 기반 (KST 새벽 종가)."
         )
     except Exception as e:
@@ -377,33 +467,39 @@ if page == "📊 대시보드":
         def _name(s):
             return s.get("name") or s["ticker"]
 
-        def _market_emoji(m):
-            return {"KOSPI": "🇰🇷", "KOSDAQ": "🇰🇷", "NASDAQ": "🇺🇸"}.get(m, "📈")
+        def _mkt_class(m):
+            return "us" if m == "NASDAQ" else "kr"
+
+        def _mkt_label(m):
+            return "US" if m == "NASDAQ" else "KR"
+
+        def _mini_card(s):
+            return (
+                f'<div class="mini-row">'
+                f'  <div class="lhs">'
+                f'    <span class="mkt {_mkt_class(s["market"])}">{_mkt_label(s["market"])}</span>'
+                f'    <span class="name">{_name(s)}</span>'
+                f'  </div>'
+                f'  <span class="rhs">{s.get("window_remaining_hours", 0):.1f}h 남음</span>'
+                f'</div>'
+            )
 
         col_f, col_h = st.columns(2)
         with col_f:
-            st.markdown(f"**🟢 매수 적기 ({len(fresh_items)}건)**")
+            st.markdown(f"#### 🟢 매수 적기 ({len(fresh_items)}건)")
             if fresh_items:
-                lines = [
-                    f"- {_market_emoji(s['market'])} {_name(s)} "
-                    f"<small>({s.get('window_remaining_hours',0):.1f}h 남음)</small>"
-                    for s in fresh_items[:10]
-                ]
-                st.markdown("\n".join(lines), unsafe_allow_html=True)
+                st.markdown("\n".join(_mini_card(s) for s in fresh_items[:10]),
+                            unsafe_allow_html=True)
                 if len(fresh_items) > 10:
                     st.caption(f"외 {len(fresh_items)-10}건 (→ 추천 시그널 페이지)")
             else:
                 st.caption("없음 — 30분 안에 발생한 시그널 없음")
 
         with col_h:
-            st.markdown(f"**🟡 보유 윈도우 ({len(hold_items)}건)**")
+            st.markdown(f"#### 🟡 보유 윈도우 ({len(hold_items)}건)")
             if hold_items:
-                lines = [
-                    f"- {_market_emoji(s['market'])} {_name(s)} "
-                    f"<small>({s.get('window_remaining_hours',0):.1f}h 남음)</small>"
-                    for s in hold_items[:10]
-                ]
-                st.markdown("\n".join(lines), unsafe_allow_html=True)
+                st.markdown("\n".join(_mini_card(s) for s in hold_items[:10]),
+                            unsafe_allow_html=True)
                 if len(hold_items) > 10:
                     st.caption(f"외 {len(hold_items)-10}건 (→ 추천 시그널 페이지)")
             else:
