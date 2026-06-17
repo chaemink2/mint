@@ -150,6 +150,46 @@ def _fetch_name_naver(ticker: str) -> Optional[str]:
         return None
 
 
+# 2026-06-17: dashboard 추천 시그널 탭 현재가 fallback. KIS 키 없는 환경
+# (Streamlit Cloud / 사용자 PC 일부)에서 작동. Naver Finance 스크래핑.
+_NAVER_PRICE_CACHE: dict[str, tuple[float, float]] = {}  # ticker -> (ts, price)
+_NAVER_PRICE_TTL_SEC = 60
+
+
+def get_current_price_naver(ticker: str) -> Optional[float]:
+    """Naver Finance 모바일 API로 현재가 추출 (KIS 인증 불필요).
+
+    엔드포인트: https://m.stock.naver.com/api/stock/{ticker}/basic
+    응답 closePrice가 정규장 중에는 현재가, 마감 후엔 종가.
+    market_index.py와 동일 패턴. 60초 캐시.
+    """
+    import time as _t
+    now = _t.time()
+    cached = _NAVER_PRICE_CACHE.get(ticker)
+    if cached and now - cached[0] < _NAVER_PRICE_TTL_SEC:
+        return cached[1]
+    try:
+        import requests
+        r = requests.get(
+            f"https://m.stock.naver.com/api/stock/{ticker}/basic",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=5,
+        )
+        if r.status_code != 200:
+            return None
+        d = r.json()
+        raw = str(d.get("closePrice") or "").replace(",", "")
+        if not raw:
+            return None
+        price = float(raw)
+        if price > 0:
+            _NAVER_PRICE_CACHE[ticker] = (now, price)
+            return price
+    except Exception as e:
+        log.debug("Naver current price fetch failed (%s): %s", ticker, e)
+    return None
+
+
 def get_stock_name(ticker: str) -> str:
     """종목명 조회. 캐시 → pykrx → Naver Finance → ticker 폴백."""
     ticker = _normalize_ticker(ticker)

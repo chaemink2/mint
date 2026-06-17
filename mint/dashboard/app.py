@@ -500,20 +500,35 @@ elif page == "🎯 추천 시그널":
 
                 window_badge = f'<span class="{badge_class}">{badge_text} · {remaining_h:.1f}h 남음</span>'
 
+                # 2026-06-17: 현재가 폴백 — KIS → Naver(KR) / yfinance(NASDAQ)
                 stale_badge = ""
                 live_price = None
+                price_source = ""
                 if s["market"] in ("KOSPI", "KOSDAQ"):
                     kp = kis_client.get_current_price(s["ticker"])
                     if kp:
                         live_price = kp.price
-                        drift = (live_price / ref - 1) * 100 if ref else 0
-                        if kis_client.is_ref_price_stale(ref, live_price):
-                            if drift > 0:
-                                stale_badge = f'<span class="tag-stale">⚠️ STALE {drift:+.1f}%</span>'
-                            else:
-                                stale_badge = f'<span class="tag-stale">💡 {drift:+.1f}%</span>'
-                        else:
-                            stale_badge = f'<span class="tag-fresh">✓ 신선 {drift:+.1f}%</span>'
+                        price_source = "KIS"
+                    else:
+                        from data.krx_client import get_current_price_naver
+                        np_ = get_current_price_naver(s["ticker"])
+                        if np_:
+                            live_price = np_
+                            price_source = "Naver"
+                elif s["market"] == "NASDAQ":
+                    from data.us_client import get_current_price as get_us_price
+                    up = get_us_price(s["ticker"])
+                    if up:
+                        live_price = up
+                        price_source = "yf"
+
+                if live_price and ref:
+                    drift = (live_price / ref - 1) * 100
+                    if s["market"] in ("KOSPI", "KOSDAQ") and kis_client.is_ref_price_stale(ref, live_price):
+                        marker = "⚠️ STALE" if drift > 0 else "💡"
+                        stale_badge = f'<span class="tag-stale">{marker} {drift:+.1f}%</span>'
+                    else:
+                        stale_badge = f'<span class="tag-fresh">✓ {drift:+.1f}%</span>'
 
                 cur_sym = "$" if s["market"] == "NASDAQ" else "₩"
                 ref_fmt = f"{cur_sym}{ref:,.2f}" if s["market"] == "NASDAQ" else f"{ref:,.0f}원"
@@ -525,7 +540,17 @@ elif page == "🎯 추천 시그널":
                     f"{cur_sym}{live_price:,.2f}" if (live_price and s["market"] == "NASDAQ")
                     else (f"{live_price:,.0f}원" if live_price else "")
                 )
-                live_part = f" · 현재가 {live_fmt}" if live_price else ""
+                # 현재가 → target / stop 까지 잔여 거리 (매수/관망 결정 보조)
+                live_part = ""
+                if live_price:
+                    src_tag = f" <span style='opacity:0.55;font-size:0.85em'>({price_source})</span>" if price_source else ""
+                    live_part = f" · 현재가 {live_fmt}{src_tag}"
+                    if tgt and stp:
+                        to_tgt = (tgt / live_price - 1) * 100
+                        to_stp = (stp / live_price - 1) * 100
+                        live_part += (
+                            f" <span style='opacity:0.75'>→ 🎯 {to_tgt:+.2f}% / 손절 {to_stp:+.2f}%</span>"
+                        )
 
                 st.markdown(
                     f"""

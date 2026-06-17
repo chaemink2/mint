@@ -102,6 +102,44 @@ def get_stock_name(ticker: str) -> str:
     return ticker
 
 
+# 2026-06-17: dashboard 추천 시그널 탭 현재가 표시용. KR(KIS)과 시그니처 통일.
+_PRICE_CACHE: dict[str, tuple[float, float]] = {}  # ticker -> (ts, price)
+_PRICE_CACHE_TTL_SEC = 60
+
+
+def get_current_price(ticker: str) -> Optional[float]:
+    """NASDAQ 현재가 (정규장 마감 후엔 종가). yfinance 1분봉 last 또는 fast_info.
+    실패 시 None — 호출자는 graceful skip. 60초 캐시.
+    """
+    import time as _t
+    now = _t.time()
+    cached = _PRICE_CACHE.get(ticker)
+    if cached and now - cached[0] < _PRICE_CACHE_TTL_SEC:
+        return cached[1]
+    try:
+        import yfinance as yf
+        tk = yf.Ticker(ticker)
+        # 1순위: fast_info (빠름, 일부 종목 누락 가능)
+        try:
+            fi = tk.fast_info
+            p = float(fi.get("last_price") or 0)
+            if p > 0:
+                _PRICE_CACHE[ticker] = (now, p)
+                return p
+        except Exception:
+            pass
+        # 2순위: 1분봉 last (정규장 후엔 일봉 last close)
+        hist = tk.history(period="1d", interval="1m", auto_adjust=False)
+        if hist is not None and not hist.empty:
+            p = float(hist["Close"].iloc[-1])
+            if p > 0:
+                _PRICE_CACHE[ticker] = (now, p)
+                return p
+    except Exception as e:
+        log.debug("yfinance current price fetch failed (%s): %s", ticker, e)
+    return None
+
+
 def get_minute_bars(
     ticker: str, interval: str = "5m", period: str = "5d"
 ) -> Optional[pd.DataFrame]:
