@@ -87,6 +87,12 @@ class SignalConfig:
     # 트리거 시 env override 없어 default true로 동작 → 6건이 다시 dynamic 발급.
     # default false로 두면 어디서 트리거되든 fixed. 다시 켜려면 env "true" 명시.
     use_dynamic_exit: bool = os.getenv("MINT_USE_DYNAMIC_EXIT", "false").lower() == "true"
+
+    # 2026-07-27 N7: BULL/STRONG_BULL regime 회피. 40일 실측(6/17~7/27)에서
+    # BULL n=10 dec 0.0% · STRONG_BULL n=13 dec 0.0% — 23건 전멸. 상승장 끝물
+    # retracement 가설 재확인. 이 regime 진입 시 신규 매수 시그널 skip.
+    # default true (즉시 적용), env로 off 가능.
+    avoid_bull_regime: bool = os.getenv("MINT_AVOID_BULL_REGIME", "true").lower() == "true"
     # 30 → 45: 5/21 실 데이터 진단 결과 모멘텀 통과 종목 risk 평균 41.4. 30은 모두 차단.
     # 사용자 결정 사안 변경(5/21): universe 200 정상화와 묶어 시그널 회복.
     max_risk_score: float = float(os.getenv("MINT_MAX_RISK_SCORE", "45"))

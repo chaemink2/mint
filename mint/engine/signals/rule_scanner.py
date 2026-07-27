@@ -181,6 +181,18 @@ def evaluate_ticker_minute_first(
                 stats["skipped_etf"] = stats.get("skipped_etf", 0) + 1
             return None
 
+    # 2026-07-27 N7: BULL/STRONG_BULL regime 회피 — 분봉 fetch 전에 컷.
+    if config.signal.avoid_bull_regime:
+        try:
+            from engine.market_regime import get_regime
+            _r = get_regime(market)
+            if _r is not None and _r.label in ("BULL", "STRONG_BULL"):
+                if stats is not None:
+                    stats["skipped_bull_regime"] = stats.get("skipped_bull_regime", 0) + 1
+                return None
+        except Exception as e:
+            log.debug("regime filter (minute_first) failed (%s): %s", market, e)
+
     # 1. 분봉 1차 발견 — 가장 비싼 호출이라 먼저 게이트
     from engine.signals.minute_rule import fetch_and_discover
     minute_info = fetch_and_discover(ticker, market=market)
@@ -317,6 +329,22 @@ def evaluate_ticker(
             return None
 
     sig = config.signal
+
+    # 2026-07-27 N7: BULL/STRONG_BULL regime 회피. 40일 실측 dec 0.0% (n=23) — 강세장
+    # 끝물 retracement. 신규 매수 시그널 skip. env MINT_AVOID_BULL_REGIME=false로 off.
+    if sig.avoid_bull_regime:
+        from engine.market_regime import SUPPORTED_REGIME_MARKETS
+        if market in SUPPORTED_REGIME_MARKETS:
+            try:
+                from engine.market_regime import get_regime
+                _r = get_regime(market)
+                if _r is not None and _r.label in ("BULL", "STRONG_BULL"):
+                    if stats is not None:
+                        stats["skipped_bull_regime"] = stats.get("skipped_bull_regime", 0) + 1
+                    return None
+            except Exception as e:
+                log.debug("regime filter check failed (%s): %s", market, e)
+
     expected = _estimate_expected_return_1d(df)
     risk = _risk_score(df)
     vol_ratio = _volume_ratio(df)
